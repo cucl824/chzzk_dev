@@ -1,5 +1,16 @@
-node_modules/
+# Gradle / 빌드
+.gradle/
+build/
+!gradle/wrapper/gradle-wrapper.jar
+
+# IDE
+.idea/
+*.iml
+.vscode/
+bin/
+out/
+
+# 실행 시 생성되는 데이터와 로컬 설정
 .env
 data/
 uploads/
-*.tmp

@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "vod",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["start"],
+      "runtimeExecutable": "./gradlew.bat",
+      "runtimeArgs": ["bootRun", "--console=plain"],
       "port": 3000
     }
   ]

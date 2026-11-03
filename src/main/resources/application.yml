@@ -1,0 +1,26 @@
+# 프로젝트 루트의 .env 파일이 있으면 읽어서 아래 ${...} 값으로 사용한다. (없으면 기본값)
+spring:
+  config:
+    import: optional:file:.env[.properties]
+  application:
+    name: chzzk-vod
+  servlet:
+    multipart:
+      max-file-size: ${MAX_UPLOAD_MB:500}MB
+      max-request-size: ${MAX_UPLOAD_MB:500}MB
+  # 방송 메타데이터는 파일 기반 H2 DB에 영속 저장한다. (재시작해도 유지)
+  datasource:
+    url: jdbc:h2:file:${DATA_DIR:./data}/vod
+    username: sa
+    password: ""
+  jpa:
+    hibernate:
+      ddl-auto: update
+    open-in-view: false
+
+server:
+  port: ${PORT:3000}
+
+app:
+  upload-dir: ${UPLOAD_DIR:uploads}
+  max-upload-mb: ${MAX_UPLOAD_MB:500}
