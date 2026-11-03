@@ -123,6 +123,8 @@ select {
   padding: 10px 12px; border-radius: 8px; border: 1px solid var(--panel-2);
   background: var(--panel); color: var(--text); font: inherit;
 }
+.source-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+.source-grid select { width: 100%; }
 .check { display: flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
 .notice { padding: 12px 14px; border-radius: 8px; background: #3a2f10; color: #ffd75e; font-size: 14px; line-height: 1.5; }
 

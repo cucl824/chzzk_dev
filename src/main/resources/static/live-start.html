@@ -12,16 +12,16 @@
     <a class="btn secondary" href="/">목록</a>
   </header>
   <main>
-    <h1>휴대폰 라이브 송출</h1>
+    <h1>라이브 송출</h1>
 
     <p id="insecure" class="notice" hidden>
       이 주소는 HTTPS가 아니라서 브라우저가 카메라·마이크를 막습니다.
-      휴대폰에서는 <b>https://</b> 주소로 접속하세요. (README의 "휴대폰 연결" 참고)
+      다른 기기(휴대폰 등)에서는 <b>https://</b> 주소로, 서버를 켠 컴퓨터에서는 <b>http://localhost</b> 로 접속하세요. (README의 "송출 기기 연결" 참고)
     </p>
 
     <div class="player-wrap">
       <video id="preview" class="player" autoplay muted playsinline></video>
-      <div id="previewOverlay" class="player-overlay">카메라를 켜면 미리보기가 나옵니다.</div>
+      <div id="previewOverlay" class="player-overlay">미리보기를 켜면 송출될 화면이 나옵니다.</div>
     </div>
 
     <div class="status-line">
@@ -35,13 +35,23 @@
       <label>방송 제목
         <input type="text" name="title" maxlength="100" required placeholder="예) 동네 산책 라이브">
       </label>
-      <div class="row">
-        <select name="facing" aria-label="카메라">
-          <option value="user">전면 카메라</option>
-          <option value="environment">후면 카메라</option>
-        </select>
-        <button type="button" class="btn secondary" id="cameraBtn">카메라·마이크 켜기</button>
+      <div class="source-grid">
+        <label>영상
+          <!-- 휴대폰: 전면/후면 카메라, 컴퓨터: 웹캠 목록 + 화면 공유 (스크립트에서 채움) -->
+          <select name="source"></select>
+        </label>
+        <label>소리
+          <select name="mic">
+            <option value="default">기본 마이크</option>
+            <option value="off">마이크 사용 안 함</option>
+          </select>
+        </label>
       </div>
+      <p id="screenHint" class="muted" hidden>
+        화면 공유를 누르면 브라우저가 공유할 화면·창·탭을 묻습니다.
+        Chrome/Edge에서 <b>탭</b>이나 <b>전체 화면</b>을 고르고 "오디오 공유"를 켜면 컴퓨터 소리도 마이크와 함께 송출됩니다.
+      </p>
+      <div><button type="button" class="btn secondary" id="cameraBtn">미리보기 켜기 (권한 허용)</button></div>
       <label class="check">
         <input type="checkbox" name="record" checked>
         방송 종료 후 녹화본을 다시보기로 저장
@@ -52,7 +62,7 @@
 
     <!-- 방송 중 -->
     <section id="onAir" class="panel" hidden>
-      <p class="muted" style="margin-top:0">아래 주소를 다른 기기에서 열면 시청할 수 있습니다. 화면을 끄거나 다른 앱으로 전환하면 송출이 멈출 수 있습니다.</p>
+      <p class="muted" style="margin-top:0">아래 주소를 다른 기기에서 열면 시청할 수 있습니다. 휴대폰은 화면을 끄거나 다른 앱으로 전환하면 송출이 멈출 수 있습니다.</p>
       <div class="share">
         <input type="text" id="shareUrl" readonly>
         <button type="button" class="btn secondary" id="copyBtn">복사</button>
@@ -80,7 +90,10 @@
     const setup = $('setup');
     const preview = $('preview');
 
-    let stream = null;        // 카메라+마이크 MediaStream
+    let stream = null;        // 송출할 MediaStream (영상 1개 + 소리 0~1개)
+    let micTrack = null;      // 마이크 끄기/켜기 대상
+    let sourceTracks = [];    // 종료 시 멈출 원본 트랙 (화면 공유 소리·마이크를 섞었을 때 원본 포함)
+    let audioContext = null;  // 화면 소리 + 마이크 믹싱용
     let live = null;          // 시작된 라이브 정보
     let token = null;         // 송출 토큰 (종료·녹화본 등록에 사용)
     let ws = null;
@@ -108,45 +121,159 @@
       $('setupError').hidden = false;
     }
 
-    // ---- 1. 카메라·마이크 ----
-    async function openCamera() {
+    // ---- 1. 송출 소스 (카메라 / 화면 공유 + 마이크) ----
+    const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent)
+      || (navigator.maxTouchPoints > 1 && /Mac/.test(navigator.platform));
+    const canShareScreen = !!navigator.mediaDevices?.getDisplayMedia && !isMobile;
+
+    // 영상 선택지: 휴대폰은 전면/후면, 컴퓨터는 기본 웹캠 + (권한 허용 후) 웹캠 목록 + 화면 공유
+    function fillSourceOptions(videoDevices = []) {
+      const current = setup.source.value;
+      const options = isMobile
+        ? [['camera:user', '전면 카메라'], ['camera:environment', '후면 카메라']]
+        : [['camera:default', '기본 카메라 (웹캠)'],
+          ...videoDevices.map((d, i) => [`device:${d.deviceId}`, `카메라: ${d.label || `카메라 ${i + 1}`}`])];
+      if (canShareScreen) options.push(['screen', '화면 공유 (모니터·창·탭)']);
+      setup.source.replaceChildren(...options.map(([value, text]) => el('option', { value }, text)));
+      if (options.some(([value]) => value === current)) setup.source.value = current;
+    }
+
+    function fillMicOptions(audioDevices) {
+      const current = setup.mic.value;
+      setup.mic.replaceChildren(
+        el('option', { value: 'default' }, '기본 마이크'),
+        ...audioDevices.filter((d) => d.deviceId !== 'default' && d.deviceId !== 'communications')
+          .map((d, i) => el('option', { value: d.deviceId }, `마이크: ${d.label || `마이크 ${i + 1}`}`)),
+        el('option', { value: 'off' }, '마이크 사용 안 함'),
+      );
+      if ([...setup.mic.options].some((o) => o.value === current)) setup.mic.value = current;
+    }
+
+    // 장치 이름(label)은 권한을 허용한 뒤에만 보이므로 미리보기를 켠 후 목록을 갱신한다.
+    async function refreshDevices() {
+      if (isMobile || !navigator.mediaDevices?.enumerateDevices) return;
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      fillSourceOptions(devices.filter((d) => d.kind === 'videoinput' && d.deviceId));
+      fillMicOptions(devices.filter((d) => d.kind === 'audioinput' && d.deviceId));
+    }
+
+    function micConstraints() {
+      const mic = setup.mic.value;
+      if (mic === 'off') return false;
+      const base = { echoCancellation: true, noiseSuppression: true };
+      return mic === 'default' ? base : { ...base, deviceId: { exact: mic } };
+    }
+
+    function stopSources() {
+      sourceTracks.forEach((t) => t.stop());
+      sourceTracks = [];
+      audioContext?.close().catch(() => {});
+      audioContext = null;
+      stream = null;
+      micTrack = null;
+    }
+
+    // 화면 공유 소리와 마이크를 하나의 오디오 트랙으로 섞는다. (WebRTC·녹화 모두 트랙 1개가 안정적)
+    function mixAudio(tracks) {
+      if (tracks.length <= 1) return tracks[0] || null;
+      audioContext = new AudioContext();
+      const out = audioContext.createMediaStreamDestination();
+      tracks.forEach((t) => audioContext.createMediaStreamSource(new MediaStream([t])).connect(out));
+      return out.stream.getAudioTracks()[0];
+    }
+
+    async function captureCamera(source) {
+      const video = { width: { ideal: 1280 }, height: { ideal: 720 } };
+      if (source.startsWith('device:')) video.deviceId = { exact: source.slice(7) };
+      else if (source !== 'camera:default') video.facingMode = source.slice(7);
+      const media = await navigator.mediaDevices.getUserMedia({ video, audio: micConstraints() });
+      sourceTracks = media.getTracks();
+      micTrack = media.getAudioTracks()[0] || null;
+      return media;
+    }
+
+    async function captureScreen() {
+      const display = await navigator.mediaDevices.getDisplayMedia({
+        video: { frameRate: { ideal: 30 }, width: { ideal: 1920 }, height: { ideal: 1080 } },
+        audio: true,
+      });
+      sourceTracks = display.getTracks();
+      const mic = micConstraints();
+      if (mic) {
+        try {
+          const micMedia = await navigator.mediaDevices.getUserMedia({ audio: mic });
+          micTrack = micMedia.getAudioTracks()[0];
+          sourceTracks.push(micTrack);
+        } catch {
+          // 마이크 권한이 없어도 화면만으로 송출할 수 있다.
+          showSetupError('마이크를 켜지 못해 화면(과 공유한 소리)만 송출합니다.');
+        }
+      }
+      const audio = mixAudio([...display.getAudioTracks(), ...(micTrack ? [micTrack] : [])]);
+      const videoTrack = display.getVideoTracks()[0];
+      // 브라우저의 "공유 중지" 버튼을 누르면 화면 트랙이 끝난다 → 방송 중이면 종료한다.
+      videoTrack.addEventListener('ended', () => {
+        if (live && !finished && !ending) endBroadcast('화면 공유가 중지되어 방송을 종료했습니다.');
+        else if (!live) resetPreview('화면 공유가 중지되었습니다. 다시 미리보기를 켜세요.');
+      });
+      return new MediaStream([videoTrack, ...(audio ? [audio] : [])]);
+    }
+
+    function resetPreview(message) {
+      stopSources();
+      preview.srcObject = null;
+      $('previewOverlay').textContent = message;
+      $('previewOverlay').hidden = false;
+      $('startBtn').disabled = true;
+      setStatus('대기');
+    }
+
+    async function openSource() {
       $('setupError').hidden = true;
       if (!navigator.mediaDevices?.getUserMedia) {
-        showSetupError('이 브라우저(또는 http 주소)에서는 카메라를 사용할 수 없습니다. https 주소로 접속하세요.');
+        showSetupError('이 브라우저(또는 http 주소)에서는 카메라를 사용할 수 없습니다. https 또는 localhost 주소로 접속하세요.');
         return;
       }
-      stream?.getTracks().forEach((t) => t.stop());
-      const facing = setup.facing.value;
+      stopSources();
+      const source = setup.source.value;
       try {
-        stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
-          audio: { echoCancellation: true, noiseSuppression: true },
-        });
+        stream = source === 'screen' ? await captureScreen() : await captureCamera(source);
       } catch (err) {
-        stream = null;
+        stopSources();
         $('startBtn').disabled = true;
+        const what = source === 'screen' ? '화면 공유' : '카메라·마이크';
         const reason = err.name === 'NotAllowedError'
-          ? '카메라·마이크 권한이 거부되었습니다. 브라우저 주소창의 권한 설정에서 허용한 뒤 다시 눌러 주세요.'
-          : err.name === 'NotFoundError' ? '사용할 수 있는 카메라나 마이크가 없습니다.'
-          : `카메라를 켤 수 없습니다: ${err.message}`;
+          ? `${what} 권한이 거부되었거나 취소되었습니다. 브라우저 주소창의 권한 설정에서 허용한 뒤 다시 눌러 주세요.`
+          : err.name === 'NotFoundError' ? '사용할 수 있는 카메라나 마이크가 없습니다. "소리"를 "마이크 사용 안 함"으로 바꾸거나 화면 공유를 써 보세요.'
+          : err.name === 'NotReadableError' ? '다른 프로그램이 카메라·마이크를 쓰고 있습니다. 해당 프로그램을 닫고 다시 시도하세요.'
+          : `${what}을(를) 켤 수 없습니다: ${err.message}`;
         showSetupError(reason);
         return;
       }
       preview.srcObject = stream;
-      preview.classList.toggle('mirror', facing === 'user');
+      preview.classList.toggle('mirror', source === 'camera:user' || source === 'camera:default');
       $('previewOverlay').hidden = true;
-      $('cameraBtn').textContent = '카메라 다시 켜기';
+      $('cameraBtn').textContent = '미리보기 다시 켜기';
       $('startBtn').disabled = false;
       setStatus('준비됨');
+      $('micBtn').hidden = !micTrack;
+      refreshDevices().catch(() => {});
     }
 
-    $('cameraBtn').addEventListener('click', openCamera);
-    setup.facing.addEventListener('change', () => { if (stream) openCamera(); });
+    fillSourceOptions();
+    $('cameraBtn').addEventListener('click', openSource);
+    setup.source.addEventListener('change', () => {
+      $('screenHint').hidden = setup.source.value !== 'screen';
+      // 화면 공유는 사용자가 직접 고르는 창이 뜨므로 자동으로 다시 열지 않는다.
+      if (stream && setup.source.value !== 'screen') openSource();
+      else if (stream) resetPreview('화면 공유를 쓰려면 미리보기 켜기를 누르세요.');
+    });
+    setup.mic.addEventListener('change', () => { if (stream && setup.source.value !== 'screen') openSource(); });
 
     // ---- 2. 방송 시작 ----
     setup.addEventListener('submit', async (e) => {
       e.preventDefault();
-      if (!stream) return showSetupError('먼저 카메라·마이크를 켜세요.');
+      if (!stream) return showSetupError('먼저 미리보기를 켜세요.');
       $('startBtn').disabled = true;
       try {
         iceConfig = await rtcConfig();
@@ -312,6 +439,7 @@
       closeAllPeers();
       const blob = await stopRecording();
       stream?.getTracks().forEach((t) => t.stop());
+      stopSources();
       preview.srcObject = null;
       $('previewOverlay').textContent = '방송이 종료되었습니다.';
       $('previewOverlay').hidden = false;
@@ -322,8 +450,7 @@
       if (blob && blob.size) uploadRecording(blob);
     }
 
-    $('endBtn').addEventListener('click', async () => {
-      if (!confirm('방송을 종료할까요?')) return;
+    async function endBroadcast(message) {
       $('endBtn').disabled = true;
       ending = true;
       try {
@@ -332,14 +459,18 @@
         // 이미 서버에서 종료된 경우에도 화면은 종료 처리한다.
         console.warn(err);
       }
-      finish('방송이 종료되었습니다.');
+      finish(message);
+    }
+
+    $('endBtn').addEventListener('click', () => {
+      if (confirm('방송을 종료할까요?')) endBroadcast('방송이 종료되었습니다.');
     });
 
+    // 마이크만 끈다. (화면 공유 소리를 섞은 경우 컴퓨터 소리는 계속 나간다)
     $('micBtn').addEventListener('click', () => {
-      const audio = stream?.getAudioTracks()[0];
-      if (!audio) return;
-      audio.enabled = !audio.enabled;
-      $('micBtn').textContent = audio.enabled ? '마이크 끄기' : '마이크 켜기';
+      if (!micTrack) return;
+      micTrack.enabled = !micTrack.enabled;
+      $('micBtn').textContent = micTrack.enabled ? '마이크 끄기' : '마이크 켜기';
     });
 
     $('copyBtn').addEventListener('click', async () => {

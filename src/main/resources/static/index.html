@@ -36,7 +36,7 @@
         : `${formatDate(live.startedAt)} · ${formatElapsed(live.startedAt, live.endedAt)} 방송${live.vodBroadcastId ? ' · 다시보기 있음' : ''}`;
       return el('a', { class: 'card', href: `/live.html?id=${encodeURIComponent(live.id)}` },
         el('div', { class: 'thumb' },
-          el('div', { class: `live-thumb${on ? ' on' : ''}` }, on ? '휴대폰 라이브' : '방송 종료'),
+          el('div', { class: `live-thumb${on ? ' on' : ''}` }, on ? '라이브 방송 중' : '방송 종료'),
           statusBadge(live.status),
         ),
         el('div', { class: 'card-title', title: live.title }, live.title),
@@ -54,7 +54,7 @@
         const ended = lives.filter((l) => l.status === 'ended').slice(0, 12);
         liveList.replaceChildren(...(onAir.length
           ? onAir.map(liveCard)
-          : [el('div', { class: 'empty' }, '지금 방송 중인 라이브가 없습니다. 휴대폰으로 라이브를 시작해 보세요.')]));
+          : [el('div', { class: 'empty' }, '지금 방송 중인 라이브가 없습니다. 휴대폰이나 컴퓨터로 라이브를 시작해 보세요.')]));
         endedList.replaceChildren(...ended.map(liveCard));
         document.getElementById('endedSection').hidden = !ended.length;
       } catch (err) {
