@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "vod",
-      "runtimeExecutable": "./gradlew.bat",
-      "runtimeArgs": ["bootRun", "--console=plain"],
+      "runtimeExecutable": "cmd",
+      "runtimeArgs": ["/c", "C:\\Users\\rico7\\chk\\gradlew.bat", "-p", "C:\\Users\\rico7\\chk", "bootRun", "--console=plain"],
       "port": 3000
     }
   ]

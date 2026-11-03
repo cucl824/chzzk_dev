@@ -18,6 +18,32 @@ function el(tag, attrs = {}, ...children) {
   return node;
 }
 
+// 유튜브 주소는 영상 파일이 아니라 웹페이지라서 <video>로 재생할 수 없다.
+// 영상 ID를 뽑아 유튜브 임베드 플레이어(iframe)로 재생한다. 유튜브가 아니면 null.
+function youtubeId(url) {
+  let u;
+  try { u = new URL(url); } catch { return null; }
+  const host = u.hostname.replace(/^(www\.|m\.|music\.)/, '');
+  let id = null;
+  if (host === 'youtu.be') {
+    id = u.pathname.split('/')[1];
+  } else if (host === 'youtube.com' || host === 'youtube-nocookie.com') {
+    const [, first, second] = u.pathname.split('/');
+    id = first === 'watch' ? u.searchParams.get('v')
+      : ['embed', 'shorts', 'live', 'v'].includes(first) ? second
+      : null;
+  }
+  return id && /^[A-Za-z0-9_-]{11}$/.test(id) ? id : null;
+}
+
+// 유튜브 주소의 t=90, t=1m30s 같은 시작 위치를 초 단위로 바꾼다.
+function youtubeStart(url) {
+  const t = new URL(url).searchParams.get('t') || '';
+  const m = t.match(/^(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s?)?$/);
+  if (!m) return 0;
+  return (Number(m[1] || 0) * 3600) + (Number(m[2] || 0) * 60) + Number(m[3] || 0);
+}
+
 function formatDate(iso) {
   return new Date(iso).toLocaleString('ko-KR', { dateStyle: 'medium', timeStyle: 'short' });
 }

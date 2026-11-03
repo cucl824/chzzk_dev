@@ -33,9 +33,11 @@
         document.title = `${b.title} - 다시보기`;
         document.getElementById('title').textContent = b.title;
 
+        const ytId = youtubeId(b.videoUrl);
         const meta = document.getElementById('meta');
         const renderMeta = (views) => {
-          const source = b.sourceType === 'upload' ? `업로드 파일 ${formatSize(b.size)}` : '외부 영상 연결';
+          const source = b.sourceType === 'upload' ? `업로드 파일 ${formatSize(b.size)}`
+            : ytId ? '유튜브 영상 연결' : '외부 영상 연결';
           meta.textContent = [`조회수 ${views}`, formatDate(b.createdAt), source].join(' · ');
         };
         renderMeta(b.viewCount);
@@ -46,16 +48,34 @@
           desc.hidden = false;
         }
 
-        const player = document.getElementById('player');
-        player.src = b.videoUrl;
-        player.addEventListener('error', () => { document.getElementById('playError').hidden = false; });
-        // 처음 재생할 때 한 번만 조회수를 올린다.
-        player.addEventListener('play', async () => {
+        const countView = async () => {
           try {
             const { viewCount } = await api(`/api/broadcasts/${encodeURIComponent(b.id)}/views`, { method: 'POST' });
             renderMeta(viewCount);
           } catch { /* 조회수 실패는 재생에 영향 주지 않음 */ }
-        }, { once: true });
+        };
+
+        const player = document.getElementById('player');
+        if (ytId) {
+          // 유튜브 임베드 플레이어. 재생 이벤트를 받을 수 없으므로 상세 화면을 열 때 조회수를 올린다.
+          // 유튜브는 Referer가 없으면 재생을 막으므로 referrerPolicy를 명시한다.
+          const start = youtubeStart(b.videoUrl);
+          const frame = el('iframe', {
+            class: 'player',
+            src: `https://www.youtube.com/embed/${ytId}${start ? `?start=${start}` : ''}`,
+            title: b.title,
+            allow: 'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share',
+            allowFullscreen: true,
+            referrerPolicy: 'strict-origin-when-cross-origin',
+          });
+          player.replaceWith(frame);
+          countView();
+        } else {
+          player.src = b.videoUrl;
+          player.addEventListener('error', () => { document.getElementById('playError').hidden = false; });
+          // 처음 재생할 때 한 번만 조회수를 올린다.
+          player.addEventListener('play', countView, { once: true });
+        }
 
         status.hidden = true;
         document.getElementById('detail').hidden = false;

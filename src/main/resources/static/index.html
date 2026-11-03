@@ -29,8 +29,11 @@
           return;
         }
         for (const b of broadcasts) {
-          // 별도 썸네일 생성 없이 영상의 1초 지점 프레임을 미리보기로 사용한다.
-          const preview = el('video', { src: `${b.videoUrl}#t=1`, preload: 'metadata', muted: true });
+          // 유튜브는 제공 썸네일을, 그 외에는 영상의 1초 지점 프레임을 미리보기로 사용한다.
+          const ytId = youtubeId(b.videoUrl);
+          const preview = ytId
+            ? el('img', { src: `https://i.ytimg.com/vi/${ytId}/hqdefault.jpg`, alt: '' })
+            : el('video', { src: `${b.videoUrl}#t=1`, preload: 'metadata', muted: true });
           list.append(
             el('a', { class: 'card', href: `/watch.html?id=${encodeURIComponent(b.id)}` },
               el('div', { class: 'thumb' }, preview, el('span', { class: 'badge' }, '다시보기')),
