@@ -75,7 +75,7 @@ h1 { font-size: 22px; margin: 0 0 20px; }
 form { max-width: 640px; display: grid; gap: 18px; }
 label { display: grid; gap: 6px; font-weight: 600; font-size: 14px; }
 /* 입력칸은 배경·패널과 구분되도록 더 밝은 바탕과 테두리를 쓴다 */
-input[type="text"], input[type="url"], input[type="password"], input[type="email"], textarea, select {
+input[type="text"], input[type="url"], input[type="password"], input[type="email"], input[type="number"], textarea, select {
   width: 100%; padding: 10px 12px; border-radius: 8px;
   border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text);
   font: inherit;
@@ -147,6 +147,26 @@ button.link, a.link { background: none; border: 0; padding: 0; color: var(--acce
 .auth-box { max-width: 420px; }
 .tabs-row { display: flex; gap: 8px; margin-bottom: 16px; }
 .tabs-row .btn[aria-pressed="false"] { background: var(--panel-2); color: var(--text); }
+
+/* 후원 */
+.btn.donate { background: #ffb800; color: #1a1400; }
+.small { font-size: 12px; }
+.donation-total { font-size: 15px; margin-bottom: 10px; }
+.donation-total b { color: #ffb800; font-size: 18px; }
+.donation-form { max-width: 520px; margin-bottom: 12px; }
+.donations { list-style: none; margin: 0; padding: 0; display: grid; gap: 8px; }
+.donation { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; padding: 10px 14px; border-radius: var(--radius); background: #2b2412; }
+.donation-amount { color: #ffb800; font-weight: 800; }
+.donation-message { color: var(--text); }
+.result-box { max-width: 520px; display: grid; gap: 12px; }
+.pg-window { max-width: 420px; margin: 40px auto; padding: 24px; border-radius: 14px; background: #f4f5f7; color: #1b1d22; display: grid; gap: 14px; }
+.pg-window .muted { color: #5c616b; }
+.pg-window h1 { font-size: 20px; margin: 0; }
+.pg-amount { font-size: 28px; font-weight: 800; }
+.pg-badge { display: inline-block; padding: 3px 8px; border-radius: 6px; background: #3478f6; color: #fff; font-size: 12px; font-weight: 700; }
+.pg-window .btn { width: 100%; padding: 12px; }
+.pg-window .btn.pay { background: #3478f6; color: #fff; }
+.pg-window .btn.secondary { background: #e2e4e8; color: #1b1d22; }
 
 .btn { white-space: nowrap; }
 @media (max-width: 420px) {

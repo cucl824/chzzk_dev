@@ -1,10 +1,11 @@
-# 치지직 만들기 — 3단계: 인증·인가와 댓글 (+ 1단계 녹화 방송, 2단계 라이브)
+# 치지직 만들기 — 4단계: 도네이션 (+ 1단계 녹화 방송, 2단계 라이브, 3단계 인증·댓글)
 
 치지직 같은 방송 플랫폼을 단계별로 만드는 프로젝트입니다.
 
 - **1단계 (유지)**: 녹화 방송(다시보기)을 등록하고 목록·상세 화면에서 재생
 - **2단계 (유지)**: 휴대폰 카메라·마이크(컴퓨터는 웹캠·화면 공유)로 라이브 방송을 시작·종료하고 다른 화면에서 시청. 방송 중/종료 상태 표시
-- **3단계 (이번)**: **회원가입·로그인·로그아웃**, 방송 **소유자** 구분과 **서버 권한 검사**(등록·수정·삭제·송출 제어), 방송별 **댓글**(작성·목록·작성자만 수정·삭제)
+- **3단계 (유지)**: 회원가입·로그인·로그아웃, 방송 소유자 구분과 서버 권한 검사(등록·수정·삭제·송출 제어), 방송별 댓글(작성·목록·작성자만 수정·삭제)
+- **4단계 (이번)**: 로그인한 사용자가 방송자에게 **도네이션(후원)**. 결제 서비스 **테스트·샌드박스 모드**로 결제 요청 → **서버 승인 확인(금액·수신 대상 검증)** → 확정, **승인 통지 중복 방지**, 방송별 **후원 내역·합계** 표시
 
 ## 기술 스택
 
@@ -17,6 +18,7 @@
 | 업로드 | Spring Multipart → 로컬 디스크 (`uploads/`) |
 | 라이브 송출 | 브라우저 `getUserMedia`(카메라·마이크), `getDisplayMedia`(컴퓨터 화면 공유) + **WebRTC** (영상은 P2P로 전송) |
 | 라이브 시그널링 | WebSocket `/ws/lives/{id}` (offer / answer / ICE 중계) |
+| 결제 (4단계) | **내장 테스트 PG**(기본, 키 불필요) 또는 **토스페이먼츠 테스트 모드**(테스트 키) — 실제 돈은 결제되지 않음 |
 | 화면 | 정적 HTML + 바닐라 JS (`src/main/resources/static`) |
 
 ## 인증·인가와 공개 범위
@@ -33,6 +35,8 @@
 | 라이브 송출 연결(WebSocket publish), 종료, 제목 수정, 녹화본 등록, 종료된 기록 삭제 | ❌ 401 / 거절 | ❌ 403 / 거절 | ✅ 소유자만 |
 | 댓글 작성 | ❌ 401 | ✅ (작성자 = 로그인 사용자) | ✅ |
 | 댓글 수정·삭제 | ❌ 401 | ❌ 403 (방송 소유자여도 남의 댓글은 불가) | ✅ 작성자만 |
+| 방송별 후원 내역·합계 조회 | ✅ 공개 | ✅ | ✅ |
+| 후원 요청(결제), 승인 확인, 실패·취소 기록 | ❌ 401 | ✅ 본인 후원만 (남의 주문 확인 403) | 자기 방송에는 후원 불가(400) |
 
 - **시청·목록 조회는 로그인 없이 공개**입니다. 치지직처럼 누구나 방송을 둘러보고 볼 수 있고, 참여(등록·송출·댓글)할 때만 로그인합니다.
 - 1·2단계에서 로그인 없이 등록된 방송·라이브 기록은 소유자가 없으므로(**등록자 없음**으로 표시) 누구도 수정·삭제할 수 없습니다. 시청·댓글은 그대로 가능합니다.
@@ -54,6 +58,54 @@
 - 아이디: 영문·숫자·밑줄 3~20자 (중복 불가) / 비밀번호: 8~64자 / 닉네임: 2~20자 (방송·댓글에 표시)
 - 가입하면 바로 로그인됩니다. 로그인 시 세션 id 를 새로 발급(세션 고정 방지)하고, 로그아웃 시 세션을 무효화합니다.
 - 비밀번호는 BCrypt 해시로만 DB에 저장되며 응답에 포함되지 않습니다.
+
+## 도네이션 (4단계)
+
+### 결제 흐름
+
+```
+ 후원자 브라우저                      우리 서버 (Spring)                         결제 서비스 (테스트 PG)
+ ───────────────                     ─────────────────                          ───────────────────────
+ 방송 화면에서 금액·메시지 선택
+ POST /api/donations ───────────────▶ 로그인 확인, 받는 사람 = 방송 소유자,
+                                      금액 범위 검사 → PENDING 저장, 주문번호 발급
+ ◀── checkout { orderId, amount } ───
+ 결제창 열기 ───────────────────────────────────────────────────────────────▶ 결제(카드 인증) / 실패 / 취소
+ ◀──────────── successUrl?paymentKey&orderId&amount  또는  failUrl?code&message&orderId ────────
+ POST /api/donations/confirm ───────▶ ① 본인 주문인지  ② amount 가 저장된 금액과 같은지
+                                      ③ 받는 사람이 아직 방송 소유자인지
+                                      ④ PG 승인 요청 ─────────────────────────▶ 승인 (금액·주문 불일치면 거절)
+                                      ⑤ PG 응답의 상태 DONE·주문번호·금액 대조 ◀──
+                                      ⑥ PENDING → PAID (조건부 UPDATE, 1번만)
+ ◀── 확정 결과 (화면은 이 결과만 표시)
+                                      POST /api/payments/webhook ◀────────── 승인 통지 (여러 번 올 수 있음)
+                                      통지 내용은 믿지 않고 PG 에 결제 조회 → ⑤⑥ 과 같은 확정 (이미 PAID 면 무시)
+```
+
+- **화면의 성공 표시만으로 확정하지 않음**: 결제창이 successUrl 로 돌려보내도 후원은 `PENDING` 입니다. 서버가 PG 승인과 금액·주문번호·받는 사람을 확인한 뒤에만 `PAID` 가 되고 합계에 들어갑니다 (`DonationService.confirm`, `applyApproved`).
+- **금액·수신 대상 검증**: 금액과 받는 사람은 요청할 때 서버가 정해 저장합니다. successUrl 의 `amount` 를 바꾸거나 결제창에서 적게 결제하면 서버 또는 PG 가 거절하고 후원은 `FAILED` 가 됩니다. 확정 전에 방송이 삭제됐거나 소유자가 바뀌었으면 확정하지 않습니다.
+- **중복 적립 방지**: `donations.order_id`·`donations.payment_key` UNIQUE, 그리고 `UPDATE … SET status='PAID' WHERE id=? AND status='PENDING'` 조건부 갱신(`DonationRepository.markPaid`). 승인 확인 새로고침, 같은 승인 통지 반복, 승인 확인과 통지가 동시에 와도 바뀌는 행은 처음 한 번뿐입니다. PG 가 "이미 처리된 결제"라고 하면 조회 결과로 같은 확인을 합니다.
+- **승인 통지(웹훅) 위조 방지**: `POST /api/payments/webhook` 은 PG 가 부르므로 로그인·CSRF 없이 받지만, 본문을 믿지 않고 `paymentKey` 로 PG 에 결제를 다시 조회해 상태·금액을 확인합니다. PG 에 없는 결제키면 `ignored`.
+- **상태**: `pending`(결제 대기) → `paid`(확정) / `failed`(실패·승인 거절·검증 실패) / `canceled`(사용자 취소). 합계·내역에는 `paid` 만 들어갑니다.
+- 금액: 1,000원 ~ 500,000원 (`DONATION_MIN_AMOUNT`, `DONATION_MAX_AMOUNT`), 메시지 100자, 자기 방송에는 후원 불가, 소유자 없는 1·2단계 방송에는 후원 불가.
+
+### 결제 모드 (테스트 전용)
+
+| `PAYMENT_PROVIDER` | 설명 |
+| --- | --- |
+| `sandbox` (기본) | **내장 테스트 PG**. 키 없이 바로 동작합니다. `/sandbox-pg.html` 결제창에서 **결제 성공 / 결제 실패(카드사 거절) / 결제 취소 / 금액 조작 테스트**를 고를 수 있습니다. 실제 PG 처럼 결제키 발급 → 서버 승인 요청 → 조회 API를 흉내 냅니다 (`payment/SandboxPaymentGateway`). |
+| `toss` | **토스페이먼츠 테스트 모드**. [토스페이먼츠 개발자센터](https://developers.tosspayments.com/)에 가입하면 내 개발 정보 → API 키에서 **테스트 키**(`test_ck_…`, `test_sk_…`)를 받을 수 있습니다. 테스트 키로는 실제 결제가 일어나지 않으며, 서버는 `test_` 로 시작하지 않는 키는 거부합니다. 결제창은 토스 SDK(`js.tosspayments.com/v2/standard`), 승인은 `POST /v1/payments/confirm`, 통지 확인은 `GET /v1/payments/{paymentKey}` (`payment/TossPaymentsGateway`). |
+
+토스 모드로 실행:
+
+```dotenv
+PAYMENT_PROVIDER=toss
+TOSS_CLIENT_KEY=test_ck_본인테스트클라이언트키
+TOSS_SECRET_KEY=test_sk_본인테스트시크릿키
+```
+
+- 시크릿 키는 `.env` 에만 두고 커밋하지 않습니다(`.gitignore`). 이 저장소에는 실제 키가 없습니다.
+- 토스 승인 통지(웹훅)를 받으려면 개발자센터 → 웹훅에 `https://<공개 주소>/api/payments/webhook` 을 등록합니다(로컬은 cloudflared 터널 주소 사용). 등록하지 않아도 결제 승인 확인 흐름은 동작합니다.
 
 ## 실행 방법
 
@@ -104,6 +156,13 @@ STUN_URLS=stun:stun.l.google.com:19302
 TURN_URL=                         # (선택) 다른 망끼리 연결이 안 될 때만
 TURN_USERNAME=
 TURN_CREDENTIAL=
+
+# 4단계 — 도네이션 (테스트 결제만)
+PAYMENT_PROVIDER=sandbox          # sandbox(내장 테스트 PG, 기본) | toss(토스페이먼츠 테스트 모드)
+TOSS_CLIENT_KEY=                  # toss 일 때만: test_ck_… (개발자센터 테스트 키)
+TOSS_SECRET_KEY=                  # toss 일 때만: test_sk_… (비밀 값 — .env 에만, 커밋 금지)
+DONATION_MIN_AMOUNT=1000          # 후원 최소 금액(원)
+DONATION_MAX_AMOUNT=500000        # 후원 최대 금액(원)
 ```
 
 ## 송출 기기 연결
@@ -187,7 +246,16 @@ cloudflared tunnel --url http://localhost:3000
 
 ## 이번 단계 구현 범위
 
-### 3단계 — 인증·인가와 댓글 (이번에 추가)
+### 4단계 — 도네이션 (이번에 추가)
+
+- **후원 요청** (다시보기 상세·라이브 시청 화면의 "후원" 영역): 로그인한 사용자가 **받는 방송자**(그 방송의 소유자)를 확인하고 **금액**(1,000 / 5,000 / 10,000 / 50,000원 버튼 또는 직접 입력)과 메시지를 골라 **후원하기 (테스트 결제)**
+- **테스트 결제 요청**: 내장 테스트 PG 결제창(`/sandbox-pg.html`) 또는 토스페이먼츠 테스트 결제창
+- **서버 승인 확인 후 확정** (`/donation-result.html` → `POST /api/donations/confirm`): 본인 주문·금액·받는 사람 확인 → PG 승인 → PG 응답(상태·주문번호·금액) 대조 → 확정
+- **실패·취소 기록** (`POST /api/donations/{orderId}/fail`), **승인 통지** (`POST /api/payments/webhook`, PG 조회로 검증)
+- **중복 방지**: 주문번호·결제키 UNIQUE + PENDING→PAID 조건부 UPDATE. 결과 화면에 "승인 통지 2번 보내기 / 승인 확인 다시 요청" 테스트 버튼
+- **방송별 후원 내역·합계**: `GET /api/broadcasts/{id}/donations`, `GET /api/lives/{id}/donations` (확정된 후원만), 화면에 합계·건수·후원자·금액·메시지 표시, 라이브는 5초마다 갱신
+
+### 3단계 — 인증·인가와 댓글 (유지)
 
 - **회원가입·로그인·로그아웃** (`/login.html`, 헤더 오른쪽 로그인/닉네임·로그아웃)
   - `POST /api/auth/signup`, `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/me`
@@ -214,7 +282,7 @@ cloudflared tunnel --url http://localhost:3000
 - 녹화 방송 등록(`/upload.html`): 파일 업로드 또는 영상 URL 연결(mp4 주소, 유튜브 주소)
 - 목록·상세(`/watch.html?id=...`)·재생, 조회수, Range 요청(탐색), 재시작 후에도 유지
 
-**이번 단계에서 하지 않음**: 도네이션, 관리자 권한(남의 방송·댓글 관리), 비밀번호 찾기·회원 탈퇴, 미디어 서버(HLS) 기반 대규모 송출
+**이번 단계에서 하지 않음**: 실제 결제(라이브 키), 결제 취소·환불, 방송자 정산, 관리자 권한, 비밀번호 찾기·회원 탈퇴, 미디어 서버(HLS) 기반 대규모 송출
 
 ## API
 
@@ -255,6 +323,19 @@ cloudflared tunnel --url http://localhost:3000
 | GET | `/api/rtc-config` | 🔓 | WebRTC ICE 서버 설정 |
 | WS | `/ws/lives/{id}` | 🔓 시청 / 👑 송출 | 첫 메시지 `{"type":"watch"}`(시청) 또는 `{"type":"publish","token":"..."}`(송출: 로그인 세션 = 소유자 + 토큰) |
 
+### 도네이션 (4단계)
+
+| 메서드 | 경로 | 권한 | 설명 |
+| --- | --- | --- | --- |
+| POST | `/api/donations` | 🔐 | 후원 요청. JSON `{"targetType":"broadcast"\|"live","targetId","amount","message"}` → `{ donation(pending), checkout{provider, clientKey, orderId, orderName, amount} }` |
+| POST | `/api/donations/confirm` | 👑 후원자 | 결제창 성공 후 승인 확인. JSON `{"orderId","paymentKey","amount"}` → 검증·PG 승인 후 `paid` |
+| POST | `/api/donations/{orderId}/fail` | 👑 후원자 | 결제 실패·취소 기록. JSON `{"code","message"}` (`PAY_PROCESS_CANCELED` → canceled, 그 외 → failed) |
+| GET | `/api/donations/{orderId}` | 👑 후원자 | 내 후원 주문 상태 |
+| GET | `/api/broadcasts/{id}/donations` | 🔓 | 녹화 방송 후원 합계·건수·내역 `{ total, count, donations[] }` |
+| GET | `/api/lives/{id}/donations` | 🔓 | 라이브 후원 합계·건수·내역 |
+| POST | `/api/payments/webhook` | PG 서버 | 승인 통지. 토스 형식 `{"eventType":"PAYMENT_STATUS_CHANGED","data":{"paymentKey","orderId","status"}}` → `{"result": confirmed \| already-processed \| canceled \| ignored}` |
+| POST | `/api/sandbox-pg/authorize` | 테스트 PG | (sandbox 모드) 테스트 결제창의 "결제 성공" — 결제키 발급 |
+
 ### 댓글 (3단계)
 
 | 메서드 | 경로 | 권한 | 설명 |
@@ -279,6 +360,15 @@ src/main/java/dev/chzzk/vod/
     LoginUser.java             # 세션에 저장되는 로그인 사용자 (@AuthenticationPrincipal)
     AuthController.java        # 가입·로그인·내 정보
   comment/                     # 3단계: 댓글 (엔티티, 저장소, 서비스[작성자 권한], REST API)
+  donation/                    # 4단계: 도네이션
+    Donation.java              # 후원 = 결제 1건 (orderId·paymentKey UNIQUE, 상태, 금액, 후원자, 받는 방송자)
+    DonationRepository.java    # markPaid: PENDING→PAID 조건부 UPDATE (중복 확정 방지), 합계 쿼리
+    DonationService.java       # 요청·승인 확인(금액·수신 대상·PG 결과 검증)·실패·승인 통지·합계
+    DonationController.java    # REST API + 승인 통지(웹훅) 수신
+  payment/                     # 4단계: 결제 서비스 연동
+    PaymentGateway.java        # 승인(confirm)·조회(find) 인터페이스
+    TossPaymentsGateway.java   # 토스페이먼츠 테스트 모드 (PAYMENT_PROVIDER=toss)
+    SandboxPaymentGateway.java # 내장 테스트 PG (기본) + SandboxPgController(결제창 API)
   broadcast/                   # 1단계: 녹화 방송 (+ 3단계 소유자·수정·삭제)
   live/                        # 2단계: 라이브 (+ 3단계 소유자 송출 제어)
     LiveService.java           # 시작·종료·수정·삭제·녹화본, 소유자 검사, 자동 종료
@@ -294,14 +384,41 @@ src/main/resources/static/
   login.html                   # 3단계: 로그인·회원가입
   live-start.html, live.html   # 라이브 송출(로그인), 시청(+ 소유자 종료, 댓글)
   watch.html, upload.html      # 다시보기 상세(+ 소유자 수정·삭제, 댓글), 등록(로그인)
-  common.js                    # API 호출(CSRF 헤더), 로그인 상태 표시, 댓글 위젯
+  sandbox-pg.html              # 4단계: 내장 테스트 PG 결제창 (성공·실패·취소·금액 조작)
+  donation-result.html         # 4단계: 결제 후 서버 승인 확인·실패 기록, 중복 승인 테스트 버튼
+  common.js                    # API 호출(CSRF 헤더), 로그인 상태 표시, 댓글·후원 위젯, 결제창 열기
 src/test/java/dev/chzzk/vod/
   AuthAndCommentTests.java     # 가입·로그인·로그아웃, 댓글 공개 조회·로그인 작성·작성자 권한
   BroadcastApiTests.java       # 녹화 방송 + 비로그인 등록 거절, 소유자 수정·삭제, CSRF
   LiveApiTests.java            # 라이브 시그널링 + 소유자 송출 제어 (실제 HTTP 세션·WebSocket)
+  DonationApiTests.java        # 후원 성공·실패·취소, 승인 확인·통지 중복, 통지만으로 확정, 위조 통지, 금액 조작, 권한
+  payment/TossPaymentsGatewayTests.java  # 토스 승인·조회 요청 형식, 오류 해석, 테스트 키만 허용
 ```
 
 ## 직접 확인 절차
+
+### 4단계 — 테스트 결제 성공·실패·취소와 승인 통지 중복
+
+준비: `./gradlew bootRun` (기본 `PAYMENT_PROVIDER=sandbox`). 브라우저 2개로 **방송자 A**와 **후원자 B** 를 가입합니다. A 로 녹화 방송을 하나 등록하거나 라이브를 시작합니다.
+
+1. **후원 대상·금액 선택**: B 로 A 의 다시보기 상세(또는 라이브 시청) 화면 → **후원** 영역에 "받는 방송자: A" 가 보이는지 확인 → 금액 버튼(예: 10,000원)과 메시지 입력 → **후원하기 (테스트 결제)**
+   - 비로그인이면 "후원하려면 로그인하세요", A 본인 화면이면 후원 폼이 없음 (서버도 401 / 400 으로 거절)
+2. **결제 성공**: 테스트 결제창에서 **결제 성공 (테스트 카드)** → 결과 화면이 서버 확인 후 "후원이 확정되었습니다 🎉", 상태 **확정 ✅**, 합계 10,000원 · 1건 → **방송으로 돌아가기** → 후원 영역의 합계·내역(B, 10,000원, 메시지) 확인
+3. **결제 실패**: 다시 후원 → **결제 실패 (카드사 거절)** → "결제에 실패했습니다 (REJECT_CARD_PAYMENT)", 상태 **실패**, 합계 그대로
+4. **결제 취소**: 다시 후원 → **결제 취소 (창 닫기)** → "결제가 취소되었습니다 (PAY_PROCESS_CANCELED)", 상태 **취소**, 합계 그대로
+5. **승인 통지 중복**: 2번의 성공 결과 화면에서 **승인 통지 2번 보내기** → 로그에 `200 already-processed` 두 줄과 "후원 합계: 10,000원 · 1건 (변화 없어야 함)" → **승인 확인 다시 요청**도 `paid` 이고 합계 그대로. 결과 화면 새로고침(F5)을 해도 합계가 늘지 않음
+   - 터미널로 직접: 결과 화면 주소의 `paymentKey`·`orderId` 로 아래를 여러 번 실행 → 매번 `already-processed`, 합계 변화 없음
+     ```bash
+     curl -X POST -H "Content-Type: application/json" -d '{"eventType":"PAYMENT_STATUS_CHANGED","data":{"paymentKey":"<paymentKey>","orderId":"<orderId>","status":"DONE"}}' http://localhost:3000/api/payments/webhook
+     ```
+   - 위조 통지: `paymentKey` 를 아무 값(예: `sbx_fake`)으로 바꾸면 `ignored` (PG 조회로 걸러짐)
+6. **화면 성공만으로 확정되지 않음 (금액 조작)**: 다시 후원(예: 50,000원) → **[검증 테스트] 100원만 결제하고 금액 조작** → "결제 금액이 후원 요청 금액과 달라 후원을 확정하지 않았습니다", 상태 **실패**, 합계 그대로
+7. **다른 사용자**: 제3의 사용자 C 가 B 의 결과 화면 주소를 열면 403 "본인의 후원만 확인할 수 있습니다" (확정 불가)
+8. **영속성**: 서버 재시작 후에도 방송별 합계·내역이 그대로인지 확인
+9. **(선택) 토스페이먼츠 테스트 모드**: `.env` 에 `PAYMENT_PROVIDER=toss` 와 본인 테스트 키를 넣고 재시작 → 후원하기 → 토스 결제창에서 테스트 카드로 결제(성공) / 결제창 닫기(취소 `PAY_PROCESS_CANCELED` 또는 `USER_CANCEL`) → 결과 화면에서 서버 승인 확인 결과 확인. 테스트 키라 실제 출금은 없습니다.
+
+자동 테스트로도 확인합니다: `./gradlew test` 의 `DonationApiTests` (성공 1회 적립, 승인 확인·통지 반복, 통지만으로 확정, 위조 통지, 금액 조작, 실패·취소, 비로그인·다른 사용자).
+
 
 ### 3단계 — 비로그인 / 방송 소유자 / 다른 사용자로 권한 확인
 
@@ -362,4 +479,5 @@ src/test/java/dev/chzzk/vod/
 - 서로 다른 망끼리는 TURN 서버가 필요할 수 있습니다(`TURN_URL` 등).
 - 녹화본은 송출 기기 메모리에 모았다가 종료 후 업로드하므로 긴 방송은 `MAX_UPLOAD_MB`와 기기 메모리에 제한을 받습니다.
 - 세션은 서버 메모리에 있어 재시작하면 다시 로그인해야 합니다. 서버를 여러 대로 늘리면 Spring Session(Redis 등)으로 옮깁니다.
-- 라이브 댓글은 3초 폴링입니다. 다음 단계에서 같은 WebSocket 방으로 실시간 채팅·도네이션 알림을 보낼 수 있습니다.
+- 라이브 댓글은 3초, 후원 합계는 5초 폴링입니다. 같은 WebSocket 방으로 실시간 채팅·후원 알림을 보낼 수 있습니다.
+- 결제 취소·환불과 방송자 정산은 구현하지 않았습니다. 실제 서비스로 전환하려면 라이브 키, 웹훅 등록, 취소 API(`POST /v1/payments/{paymentKey}/cancel`) 연동이 필요합니다.

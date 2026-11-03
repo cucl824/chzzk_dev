@@ -40,6 +40,7 @@
         <p id="ownerError" class="error" hidden></p>
       </section>
 
+      <section id="donations"></section>
       <section id="comments"></section>
     </section>
     <p><a class="btn secondary" href="/">← 목록으로</a></p>
@@ -231,6 +232,8 @@
       $('title').textContent = live.title;
       $('title').after(el('div', { class: 'muted' }, live.owner ? `방송 ${live.owner.nickname}` : '방송자 없음(이전 단계 기록)'));
       // 라이브 중에는 채팅처럼 3초마다 새 댓글을 불러온다.
+      // 라이브 중에는 다른 시청자의 후원도 보이도록 5초마다 합계·내역을 갱신한다.
+      mountDonations($('donations'), 'live', live.id, live.owner, { pollMs: live.status === 'live' ? 5000 : 0 });
       mountComments($('comments'), `/api/lives/${encodeURIComponent(live.id)}`, { pollMs: live.status === 'live' ? 3000 : 0 });
       updateOwnerPanel();
 

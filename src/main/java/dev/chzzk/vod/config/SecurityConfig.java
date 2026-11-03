@@ -46,11 +46,15 @@ public class SecurityConfig {
 		csrfHandler.setCsrfRequestAttributeName(null);
 
 		http.csrf(csrf -> csrf.csrfTokenRepository(CookieCsrfTokenRepository.withHttpOnlyFalse())
-			.csrfTokenRequestHandler(csrfHandler))
+			.csrfTokenRequestHandler(csrfHandler)
+			// PG 서버가 보내는 승인 통지와 내장 테스트 PG 결제창은 우리 화면이 아니므로 CSRF 토큰이 없다.
+			// 승인 통지는 내용을 믿지 않고 PG 조회로 확인하므로 위조돼도 후원이 확정되지 않는다.
+			.ignoringRequestMatchers("/api/payments/webhook", "/api/sandbox-pg/**"))
 			.authorizeHttpRequests(auth -> auth
 				.requestMatchers(HttpMethod.GET, "/**").permitAll()
 				.requestMatchers(HttpMethod.POST, "/api/auth/signup", "/api/auth/login", "/api/auth/logout").permitAll()
 				.requestMatchers(HttpMethod.POST, "/api/broadcasts/*/views").permitAll()
+				.requestMatchers(HttpMethod.POST, "/api/payments/webhook", "/api/sandbox-pg/**").permitAll()
 				.requestMatchers("/api/**").authenticated()
 				.anyRequest().permitAll())
 			.exceptionHandling(ex -> ex

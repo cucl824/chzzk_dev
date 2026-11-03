@@ -236,3 +236,123 @@ async function mountComments(container, basePath, { pollMs = 0 } = {}) {
   await load();
   if (pollMs) setInterval(load, pollMs);
 }
+
+// ---- 후원 (도네이션) ----
+
+function formatWon(amount) {
+  return `${Number(amount).toLocaleString('ko-KR')}원`;
+}
+
+// 결제창 열기. 결제창이 끝나면 /donation-result.html 로 돌아오고, 그 화면이 서버에 승인 확인을 요청한다.
+async function openCheckout(checkout) {
+  const resultUrl = `${location.origin}/donation-result.html`;
+  if (checkout.provider === 'sandbox') {
+    const url = new URL('/sandbox-pg.html', location.origin);
+    Object.entries({
+      orderId: checkout.orderId, amount: checkout.amount, orderName: checkout.orderName,
+      customerName: checkout.customerName, successUrl: resultUrl, failUrl: resultUrl,
+    }).forEach(([k, v]) => url.searchParams.set(k, v));
+    location.href = url;
+    return;
+  }
+  // 토스페이먼츠 결제창 (테스트 키면 실제 결제되지 않음). 성공·실패 시 해당 주소로 이동한다.
+  await loadScript('https://js.tosspayments.com/v2/standard');
+  const payment = window.TossPayments(checkout.clientKey).payment({ customerKey: window.TossPayments.ANONYMOUS });
+  try {
+    await payment.requestPayment({
+      method: 'CARD',
+      amount: { currency: 'KRW', value: checkout.amount },
+      orderId: checkout.orderId,
+      orderName: checkout.orderName,
+      customerName: checkout.customerName,
+      successUrl: resultUrl,
+      failUrl: resultUrl,
+    });
+  } catch (err) {
+    // 결제창을 닫는 등 이동 없이 끝난 경우: 실패·취소로 기록하고 결과 화면을 보여 준다.
+    const url = new URL(resultUrl);
+    url.searchParams.set('orderId', checkout.orderId);
+    url.searchParams.set('code', err.code || 'PAY_PROCESS_CANCELED');
+    url.searchParams.set('message', err.message || '결제가 취소되었습니다.');
+    location.href = url;
+  }
+}
+
+function loadScript(src) {
+  return new Promise((resolve, reject) => {
+    if (document.querySelector(`script[src="${src}"]`)) return resolve();
+    const s = el('script', { src });
+    s.onload = resolve;
+    s.onerror = () => reject(new Error('결제 모듈을 불러오지 못했습니다.'));
+    document.head.append(s);
+  });
+}
+
+// 방송별 후원 합계·내역 + 후원 폼.
+// type: 'broadcast' | 'live', owner: 방송 소유자 { id, nickname } (받는 사람)
+async function mountDonations(container, type, targetId, owner, { pollMs = 0 } = {}) {
+  const user = await currentUser();
+  const base = `/api/${type === 'live' ? 'lives' : 'broadcasts'}/${encodeURIComponent(targetId)}`;
+  const title = el('h2', { class: 'section-title' }, '후원');
+  const total = el('div', { class: 'donation-total' }, '불러오는 중…');
+  const list = el('ul', { class: 'donations' });
+  const error = el('p', { class: 'error', hidden: true });
+
+  let form;
+  if (!owner) {
+    form = el('p', { class: 'muted' }, '방송자가 없는 이전 단계 방송이라 후원할 수 없습니다.');
+  } else if (!user) {
+    form = el('p', { class: 'muted' }, `${owner.nickname}님에게 후원하려면 `, el('a', { href: loginUrl(), class: 'link' }, '로그인'), '하세요.');
+  } else if (user.id === owner.id) {
+    form = el('p', { class: 'muted' }, '내 방송에 들어온 후원입니다.');
+  } else {
+    const amount = el('input', { type: 'number', name: 'amount', min: 1000, max: 500000, step: 1000, value: 5000, required: true });
+    const presets = [1000, 5000, 10000, 50000].map((v) => {
+      const b = el('button', { type: 'button', class: 'btn secondary' }, formatWon(v));
+      b.addEventListener('click', () => { amount.value = v; });
+      return b;
+    });
+    const message = el('input', { type: 'text', name: 'message', maxLength: 100, placeholder: '후원 메시지 (선택)' });
+    const submit = el('button', { type: 'submit', class: 'btn donate' }, '후원하기 (테스트 결제)');
+    form = el('form', { class: 'donation-form panel' },
+      el('div', {}, '받는 방송자: ', el('b', {}, owner.nickname)),
+      el('div', { class: 'row' }, ...presets),
+      el('label', {}, '금액 (원, 1,000 ~ 500,000)', amount),
+      el('label', {}, '메시지', message),
+      el('div', {}, submit),
+      el('p', { class: 'muted small' }, '테스트·샌드박스 결제라 실제 돈은 나가지 않습니다. 결제 후 서버가 승인을 확인해야 후원이 확정됩니다.'));
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      error.hidden = true;
+      submit.disabled = true;
+      try {
+        // 서버가 받는 사람(방송 소유자)·금액을 정하고 주문번호를 발급한다.
+        const { checkout } = await api('/api/donations', jsonRequest('POST', {
+          targetType: type, targetId, amount: Number(amount.value), message: message.value,
+        }));
+        await openCheckout(checkout);
+      } catch (err) {
+        error.textContent = err.status === 401 ? '로그인이 필요합니다.' : err.message;
+        error.hidden = false;
+        submit.disabled = false;
+      }
+    });
+  }
+  container.replaceChildren(title, total, form, error, list);
+
+  async function load() {
+    try {
+      const data = await api(`${base}/donations`);
+      total.replaceChildren('합계 ', el('b', {}, formatWon(data.total)), ` · ${data.count}건`);
+      list.replaceChildren(...data.donations.slice(0, 30).map((d) => el('li', { class: 'donation' },
+        el('span', { class: 'donation-amount' }, formatWon(d.amount)),
+        el('b', {}, d.donor?.nickname || '알 수 없음'),
+        d.message ? el('span', { class: 'donation-message' }, d.message) : '',
+        el('span', { class: 'muted small' }, formatDate(d.paidAt)))));
+    } catch (err) {
+      if (err.status !== 404) total.textContent = err.message;
+    }
+  }
+  await load();
+  if (pollMs) setInterval(load, pollMs);
+}

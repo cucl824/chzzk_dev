@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>테스트 결제창</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <!--
+    내장 테스트 PG 의 결제창 (PAYMENT_PROVIDER=sandbox). 실제 PG 결제창처럼 우리 서비스와 분리된 화면이며 실제 돈은 오가지 않는다.
+    - 결제 성공: 테스트 PG 가 결제키를 발급하고 successUrl?paymentKey&orderId&amount 로 이동 (아직 승인 전)
+    - 결제 실패: failUrl?code=REJECT_CARD_PAYMENT&message&orderId
+    - 결제 취소: failUrl?code=PAY_PROCESS_CANCELED&message&orderId
+    - 금액 조작: 결제는 100원만 하고 successUrl 의 amount 도 100 으로 바꿔 보냄 → 서버가 거절해야 함
+  -->
+  <main>
+    <section class="pg-window">
+      <div><span class="pg-badge">TEST MODE</span> <span class="muted">내장 테스트 PG · 실제 결제 아님</span></div>
+      <h1 id="orderName">결제</h1>
+      <div class="pg-amount" id="amount"></div>
+      <div class="muted" id="meta"></div>
+      <button type="button" class="btn pay" id="payBtn">결제 성공 (테스트 카드)</button>
+      <button type="button" class="btn secondary" id="rejectBtn">결제 실패 (카드사 거절)</button>
+      <button type="button" class="btn secondary" id="cancelBtn">결제 취소 (창 닫기)</button>
+      <button type="button" class="btn secondary" id="tamperBtn">[검증 테스트] 100원만 결제하고 금액 조작</button>
+      <p id="error" class="error" hidden></p>
+    </section>
+  </main>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const order = {
+      orderId: params.get('orderId'),
+      amount: Number(params.get('amount')),
+      orderName: params.get('orderName') || '후원',
+      successUrl: params.get('successUrl'),
+      failUrl: params.get('failUrl'),
+    };
+    document.getElementById('orderName').textContent = order.orderName;
+    document.getElementById('amount').textContent = `${order.amount.toLocaleString('ko-KR')}원`;
+    document.getElementById('meta').textContent = `주문번호 ${order.orderId} · 구매자 ${params.get('customerName') || ''}`;
+
+    // 같은 사이트의 결과 화면으로만 돌아간다.
+    function back(url, query) {
+      const target = new URL(url, location.origin);
+      if (target.origin !== location.origin) throw new Error('잘못된 돌아갈 주소입니다.');
+      Object.entries(query).forEach(([k, v]) => target.searchParams.set(k, v));
+      location.href = target;
+    }
+
+    async function pay(paidAmount, reportedAmount) {
+      const res = await fetch('/api/sandbox-pg/authorize', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ orderId: order.orderId, amount: paidAmount }),
+      });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.error || '결제창 오류');
+      back(order.successUrl, { paymentKey: body.paymentKey, orderId: order.orderId, amount: reportedAmount });
+    }
+
+    function guard(fn) {
+      return async () => {
+        try { await fn(); } catch (err) {
+          const e = document.getElementById('error');
+          e.textContent = err.message;
+          e.hidden = false;
+        }
+      };
+    }
+
+    document.getElementById('payBtn').addEventListener('click', guard(() => pay(order.amount, order.amount)));
+    document.getElementById('tamperBtn').addEventListener('click', guard(() => pay(100, 100)));
+    document.getElementById('rejectBtn').addEventListener('click', guard(() => back(order.failUrl, {
+      code: 'REJECT_CARD_PAYMENT', message: '한도초과 혹은 잔액부족으로 결제에 실패했습니다.', orderId: order.orderId,
+    })));
+    document.getElementById('cancelBtn').addEventListener('click', guard(() => back(order.failUrl, {
+      code: 'PAY_PROCESS_CANCELED', message: '사용자에 의해 결제가 취소되었습니다.', orderId: order.orderId,
+    })));
+  </script>
+</body>
+</html>

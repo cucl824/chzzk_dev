@@ -45,6 +45,7 @@
         </form>
       </section>
 
+      <section id="donations"></section>
       <section id="comments"></section>
     </section>
     <p><a class="btn secondary" href="/">← 목록으로</a></p>
@@ -146,6 +147,7 @@
         status.hidden = true;
         document.getElementById('detail').hidden = false;
         setupOwnerPanel(b);
+        mountDonations(document.getElementById('donations'), 'broadcast', b.id, b.owner);
         mountComments(document.getElementById('comments'), `/api/broadcasts/${encodeURIComponent(b.id)}`);
       } catch (err) {
         status.textContent = err.message;

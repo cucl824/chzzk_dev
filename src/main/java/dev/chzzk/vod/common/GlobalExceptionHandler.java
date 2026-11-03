@@ -15,6 +15,8 @@ import org.springframework.web.multipart.MaxUploadSizeExceededException;
 import org.springframework.web.multipart.MultipartException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import dev.chzzk.vod.payment.PaymentException;
+
 /** 모든 오류를 화면이 읽는 {"error": "..."} 형식으로 돌려준다. */
 @RestControllerAdvice
 public class GlobalExceptionHandler {
@@ -30,6 +32,11 @@ public class GlobalExceptionHandler {
 	@ExceptionHandler(ApiException.class)
 	public ResponseEntity<Map<String, String>> handleApi(ApiException e) {
 		return error(e.getStatus(), e.getMessage());
+	}
+
+	@ExceptionHandler(PaymentException.class)
+	public ResponseEntity<Map<String, String>> handlePayment(PaymentException e) {
+		return ResponseEntity.badRequest().body(Map.of("error", e.getMessage(), "code", e.getCode()));
 	}
 
 	@ExceptionHandler(MaxUploadSizeExceededException.class)

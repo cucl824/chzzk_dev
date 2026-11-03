@@ -1,0 +1,143 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>후원 결과</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <a class="logo" href="/">VOD</a>
+    <div class="header-actions">
+      <a class="btn secondary" href="/">목록</a>
+    </div>
+  </header>
+  <main>
+    <section class="result-box">
+      <h1 id="title">후원 결과 확인 중…</h1>
+      <p id="detail" class="muted">결제 결과를 서버에서 확인하고 있습니다. 화면을 닫지 마세요.</p>
+      <div id="summary" class="panel" hidden></div>
+
+      <!-- 승인 통지가 반복돼도 중복 적립되지 않는지 확인하는 테스트 도구 -->
+      <section id="dupTest" class="panel" hidden>
+        <b>중복 승인 테스트</b>
+        <p class="muted small">PG 의 승인 통지(웹훅)나 승인 확인 요청이 여러 번 와도 후원은 한 번만 적립되어야 합니다.</p>
+        <div class="row">
+          <button type="button" class="btn secondary" id="notifyBtn">승인 통지 2번 보내기</button>
+          <button type="button" class="btn secondary" id="reconfirmBtn">승인 확인 다시 요청</button>
+        </div>
+        <pre id="dupLog" class="small" hidden></pre>
+      </section>
+
+      <div class="row">
+        <a class="btn" id="backLink" href="/" hidden>방송으로 돌아가기</a>
+        <a class="btn secondary" href="/">목록</a>
+      </div>
+    </section>
+  </main>
+  <script src="/common.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const orderId = params.get('orderId');
+    const paymentKey = params.get('paymentKey');
+    const $ = (id) => document.getElementById(id);
+
+    function show(title, detail, ok) {
+      $('title').textContent = title;
+      $('detail').textContent = detail;
+      $('detail').className = ok === false ? 'error' : 'muted';
+    }
+
+    function targetPath(d) {
+      return d.targetType === 'live' ? `/live.html?id=${d.targetId}` : `/watch.html?id=${d.targetId}`;
+    }
+
+    async function totalOf(d) {
+      const t = await api(`/api/${d.targetType === 'live' ? 'lives' : 'broadcasts'}/${d.targetId}/donations`);
+      return `${formatWon(t.total)} · ${t.count}건`;
+    }
+
+    async function showDonation(d) {
+      $('backLink').href = targetPath(d);
+      $('backLink').hidden = false;
+      const statusText = { paid: '확정 ✅', pending: '확인 대기', failed: '실패', canceled: '취소' }[d.status] || d.status;
+      $('summary').replaceChildren(
+        el('div', {}, '받는 방송자: ', el('b', {}, d.recipient?.nickname || '')),
+        el('div', {}, '금액: ', el('b', {}, formatWon(d.amount))),
+        el('div', {}, `상태: ${statusText}`),
+        d.failReason ? el('div', { class: 'muted small' }, `사유: ${d.failReason}`) : '',
+        el('div', { class: 'muted small' }, `주문번호 ${d.orderId}`),
+        el('div', {}, '이 방송 후원 합계: ', el('b', { id: 'totalNow' }, await totalOf(d))),
+      );
+      $('summary').hidden = false;
+    }
+
+    async function confirmPayment() {
+      // 화면이 "성공"을 보여 주는 것이 아니라 서버가 PG 승인을 확인한 결과만 보여 준다.
+      try {
+        const { donation } = await api('/api/donations/confirm', jsonRequest('POST', {
+          orderId, paymentKey, amount: Number(params.get('amount')),
+        }));
+        show('후원이 확정되었습니다 🎉', `${donation.recipient.nickname}님에게 ${formatWon(donation.amount)}을 후원했습니다.`);
+        await showDonation(donation);
+        $('dupTest').hidden = false;
+      } catch (err) {
+        if (err.status === 401) { location.href = loginUrl(); return; }
+        show('후원을 확정하지 못했습니다', err.message, false);
+        try { await showDonation((await api(`/api/donations/${encodeURIComponent(orderId)}`)).donation); } catch { /* 주문 없음 */ }
+      }
+    }
+
+    async function recordFailure() {
+      const code = params.get('code');
+      const message = params.get('message') || '';
+      const canceled = code === 'PAY_PROCESS_CANCELED' || code === 'USER_CANCEL';
+      show(canceled ? '결제가 취소되었습니다' : '결제에 실패했습니다', `${message} (${code})`, false);
+      if (!orderId) return;
+      try {
+        const { donation } = await api(`/api/donations/${encodeURIComponent(orderId)}/fail`, jsonRequest('POST', { code, message }));
+        await showDonation(donation);
+      } catch (err) {
+        $('detail').textContent += ` · ${err.message}`;
+      }
+    }
+
+    function log(line) {
+      $('dupLog').hidden = false;
+      $('dupLog').textContent += `${line}\n`;
+    }
+
+    $('notifyBtn').addEventListener('click', async () => {
+      // PG 서버가 보내는 것과 같은 형식의 승인 통지를 두 번 보낸다. (로그인·CSRF 없이 받는 주소)
+      for (let i = 1; i <= 2; i++) {
+        const res = await fetch('/api/payments/webhook', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ eventType: 'PAYMENT_STATUS_CHANGED', data: { paymentKey, orderId, status: 'DONE' } }),
+        });
+        log(`승인 통지 ${i}번째 → ${res.status} ${(await res.json()).result}`);
+      }
+      const { donation } = await api(`/api/donations/${encodeURIComponent(orderId)}`);
+      log(`후원 합계: ${await totalOf(donation)} (변화 없어야 함)`);
+    });
+
+    $('reconfirmBtn').addEventListener('click', async () => {
+      try {
+        const { donation } = await api('/api/donations/confirm', jsonRequest('POST', { orderId, paymentKey, amount: Number(params.get('amount')) }));
+        log(`승인 확인 재요청 → ${donation.status}`);
+        log(`후원 합계: ${await totalOf(donation)} (변화 없어야 함)`);
+      } catch (err) {
+        log(`승인 확인 재요청 → ${err.status} ${err.message}`);
+      }
+    });
+
+    (async () => {
+      if (!(await requireLogin())) return;
+      if (paymentKey && orderId) await confirmPayment();
+      else if (params.get('code')) await recordFailure();
+      else show('잘못된 접근입니다', '결제 결과 정보가 없습니다.', false);
+    })();
+  </script>
+</body>
+</html>
