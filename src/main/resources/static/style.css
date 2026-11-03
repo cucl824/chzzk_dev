@@ -2,6 +2,8 @@
   --bg: #141517;
   --panel: #1f2023;
   --panel-2: #2a2b2f;
+  --input-bg: #2e3036;
+  --input-border: #464952;
   --text: #e9eaec;
   --muted: #9a9ca3;
   --accent: #00ffa3;
@@ -72,10 +74,15 @@ h1 { font-size: 22px; margin: 0 0 20px; }
 /* 등록 */
 form { max-width: 640px; display: grid; gap: 18px; }
 label { display: grid; gap: 6px; font-weight: 600; font-size: 14px; }
-input[type="text"], input[type="url"], textarea {
+/* 입력칸은 배경·패널과 구분되도록 더 밝은 바탕과 테두리를 쓴다 */
+input[type="text"], input[type="url"], input[type="password"], input[type="email"], textarea, select {
   width: 100%; padding: 10px 12px; border-radius: 8px;
-  border: 1px solid var(--panel-2); background: var(--panel); color: var(--text);
+  border: 1px solid var(--input-border); background: var(--input-bg); color: var(--text);
   font: inherit;
+}
+input::placeholder, textarea::placeholder { color: #7d8089; }
+input:focus, textarea:focus, select:focus {
+  outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px rgba(0, 255, 163, 0.18);
 }
 textarea { min-height: 100px; resize: vertical; }
 .tabs { display: flex; gap: 8px; }
@@ -119,12 +126,7 @@ progress { width: 100%; }
 .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
 .share { display: flex; gap: 8px; }
 .share input { flex: 1; min-width: 0; }
-select {
-  padding: 10px 12px; border-radius: 8px; border: 1px solid var(--panel-2);
-  background: var(--panel); color: var(--text); font: inherit;
-}
 .source-grid { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
-.source-grid select { width: 100%; }
 .check { display: flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
 .notice { padding: 12px 14px; border-radius: 8px; background: #3a2f10; color: #ffd75e; font-size: 14px; line-height: 1.5; }
 
