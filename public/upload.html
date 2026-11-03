@@ -1,0 +1,115 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>방송 등록</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <a class="logo" href="/">VOD</a>
+    <a class="btn secondary" href="/">목록</a>
+  </header>
+  <main>
+    <h1>녹화 방송 등록</h1>
+    <form id="form">
+      <label>제목
+        <input type="text" name="title" maxlength="100" required placeholder="예) 11월 3일 저챗 다시보기">
+      </label>
+      <label>설명 (선택)
+        <textarea name="description" maxlength="2000"></textarea>
+      </label>
+
+      <div class="tabs" role="group" aria-label="영상 등록 방식">
+        <button type="button" class="btn" data-mode="upload" aria-pressed="true">파일 업로드</button>
+        <button type="button" class="btn" data-mode="url" aria-pressed="false">영상 URL 연결</button>
+      </div>
+
+      <label id="fileField">영상 파일 (mp4, webm 등)
+        <input type="file" name="video" accept="video/*">
+      </label>
+      <label id="urlField" hidden>영상 URL
+        <input type="url" name="videoUrl" placeholder="https://example.com/video.mp4">
+      </label>
+
+      <progress id="progress" max="100" value="0" hidden></progress>
+      <p id="message" class="error" hidden></p>
+      <div><button class="btn" id="submit" type="submit">등록하기</button></div>
+    </form>
+  </main>
+  <script src="/common.js"></script>
+  <script>
+    const form = document.getElementById('form');
+    const fileField = document.getElementById('fileField');
+    const urlField = document.getElementById('urlField');
+    const message = document.getElementById('message');
+    const progress = document.getElementById('progress');
+    const submit = document.getElementById('submit');
+    const tabs = document.querySelectorAll('.tabs button');
+    let mode = 'upload';
+
+    tabs.forEach((btn) => {
+      btn.addEventListener('click', () => {
+        mode = btn.dataset.mode;
+        tabs.forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+        fileField.hidden = mode !== 'upload';
+        urlField.hidden = mode !== 'url';
+      });
+    });
+
+    function showError(text) {
+      message.textContent = text;
+      message.hidden = false;
+    }
+
+    function resetSubmit() {
+      submit.disabled = false;
+      progress.hidden = true;
+    }
+
+    form.addEventListener('submit', (e) => {
+      e.preventDefault();
+      message.hidden = true;
+
+      const data = new FormData();
+      data.append('title', form.title.value.trim());
+      data.append('description', form.description.value.trim());
+      if (mode === 'upload') {
+        const file = form.video.files[0];
+        if (!file) return showError('영상 파일을 선택하세요.');
+        data.append('video', file);
+      } else {
+        const url = form.videoUrl.value.trim();
+        if (!url) return showError('영상 URL을 입력하세요.');
+        data.append('videoUrl', url);
+      }
+
+      // 업로드 진행률 표시를 위해 fetch 대신 XHR 사용
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', '/api/broadcasts');
+      xhr.upload.onprogress = (ev) => {
+        if (ev.lengthComputable) progress.value = Math.round((ev.loaded / ev.total) * 100);
+      };
+      xhr.onload = () => {
+        let body = {};
+        try { body = JSON.parse(xhr.responseText); } catch { /* 빈 응답 */ }
+        if (xhr.status === 201) {
+          location.href = `/watch.html?id=${encodeURIComponent(body.broadcast.id)}`;
+          return;
+        }
+        resetSubmit();
+        showError(body.error || `등록 실패 (${xhr.status})`);
+      };
+      xhr.onerror = () => {
+        resetSubmit();
+        showError('네트워크 오류로 등록하지 못했습니다.');
+      };
+      submit.disabled = true;
+      progress.value = 0;
+      progress.hidden = mode !== 'upload';
+      xhr.send(data);
+    });
+  </script>
+</body>
+</html>

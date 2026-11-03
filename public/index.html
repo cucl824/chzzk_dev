@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>다시보기 목록</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <a class="logo" href="/">VOD</a>
+    <a class="btn" href="/upload.html">방송 등록</a>
+  </header>
+  <main>
+    <h1>다시보기</h1>
+    <p id="status" class="muted">불러오는 중…</p>
+    <div id="list" class="grid"></div>
+  </main>
+  <script src="/common.js"></script>
+  <script>
+    (async () => {
+      const status = document.getElementById('status');
+      const list = document.getElementById('list');
+      try {
+        const { broadcasts } = await api('/api/broadcasts');
+        status.hidden = true;
+        if (!broadcasts.length) {
+          list.replaceWith(el('div', { class: 'empty' }, '등록된 방송이 없습니다. 첫 방송을 등록해 보세요.'));
+          return;
+        }
+        for (const b of broadcasts) {
+          // 별도 썸네일 생성 없이 영상의 1초 지점 프레임을 미리보기로 사용한다.
+          const preview = el('video', { src: `${b.videoUrl}#t=1`, preload: 'metadata', muted: true });
+          list.append(
+            el('a', { class: 'card', href: `/watch.html?id=${encodeURIComponent(b.id)}` },
+              el('div', { class: 'thumb' }, preview, el('span', { class: 'badge' }, '다시보기')),
+              el('div', { class: 'card-title', title: b.title }, b.title),
+              el('div', { class: 'card-meta' }, `조회수 ${b.viewCount} · ${formatDate(b.createdAt)}`),
+            ),
+          );
+        }
+      } catch (err) {
+        status.textContent = err.message;
+        status.className = 'error';
+      }
+    })();
+  </script>
+</body>
+</html>

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>다시보기</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <a class="logo" href="/">VOD</a>
+    <a class="btn" href="/upload.html">방송 등록</a>
+  </header>
+  <main>
+    <p id="status" class="muted">불러오는 중…</p>
+    <section id="detail" hidden>
+      <video id="player" class="player" controls playsinline preload="metadata"></video>
+      <p id="playError" class="error" hidden>영상을 재생할 수 없습니다. 파일 형식이나 영상 URL을 확인하세요.</p>
+      <h1 id="title" class="detail-title"></h1>
+      <div id="meta" class="muted"></div>
+      <div id="desc" class="detail-desc" hidden></div>
+    </section>
+    <p><a class="btn secondary" href="/">← 목록으로</a></p>
+  </main>
+  <script src="/common.js"></script>
+  <script>
+    (async () => {
+      const status = document.getElementById('status');
+      const id = new URLSearchParams(location.search).get('id');
+      try {
+        if (!id) throw new Error('잘못된 주소입니다.');
+        const { broadcast: b } = await api(`/api/broadcasts/${encodeURIComponent(id)}`);
+        document.title = `${b.title} - 다시보기`;
+        document.getElementById('title').textContent = b.title;
+
+        const meta = document.getElementById('meta');
+        const renderMeta = (views) => {
+          const source = b.sourceType === 'upload' ? `업로드 파일 ${formatSize(b.size)}` : '외부 영상 연결';
+          meta.textContent = [`조회수 ${views}`, formatDate(b.createdAt), source].join(' · ');
+        };
+        renderMeta(b.viewCount);
+
+        if (b.description) {
+          const desc = document.getElementById('desc');
+          desc.textContent = b.description;
+          desc.hidden = false;
+        }
+
+        const player = document.getElementById('player');
+        player.src = b.videoUrl;
+        player.addEventListener('error', () => { document.getElementById('playError').hidden = false; });
+        // 처음 재생할 때 한 번만 조회수를 올린다.
+        player.addEventListener('play', async () => {
+          try {
+            const { viewCount } = await api(`/api/broadcasts/${encodeURIComponent(b.id)}/views`, { method: 'POST' });
+            renderMeta(viewCount);
+          } catch { /* 조회수 실패는 재생에 영향 주지 않음 */ }
+        }, { once: true });
+
+        status.hidden = true;
+        document.getElementById('detail').hidden = false;
+      } catch (err) {
+        status.textContent = err.message;
+        status.className = 'error';
+      }
+    })();
+  </script>
+</body>
+</html>
