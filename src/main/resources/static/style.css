@@ -84,6 +84,53 @@ textarea { min-height: 100px; resize: vertical; }
 progress { width: 100%; }
 [hidden] { display: none !important; }
 
+/* 라이브 */
+:root { --live: #ff3b4a; }
+.header-actions { display: flex; gap: 8px; }
+.btn.live { background: var(--live); color: #fff; }
+.btn.danger { background: var(--danger); color: #fff; }
+.section-title { display: flex; align-items: center; gap: 8px; font-size: 18px; margin: 32px 0 14px; }
+.section-title:first-child { margin-top: 0; }
+.badge.live { background: var(--live); color: #fff; font-weight: 700; }
+.badge.ended { background: rgba(0, 0, 0, 0.7); color: var(--muted); }
+.badge.viewers { left: auto; right: 8px; }
+.live-thumb {
+  width: 100%; height: 100%; display: grid; place-items: center;
+  background: radial-gradient(circle at 30% 30%, #3a1d24, #17181b 70%);
+  color: var(--muted); font-size: 13px;
+}
+.live-thumb.on { background: radial-gradient(circle at 30% 30%, #5a1a26, #1b1416 70%); color: #ffb3ba; }
+.status-line { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin: 12px 0; }
+.status-pill {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 4px 10px; border-radius: 999px; font-size: 13px; font-weight: 700;
+  background: var(--panel-2); color: var(--muted);
+}
+.status-pill.live { background: var(--live); color: #fff; }
+.status-pill.wait { background: #5a4a12; color: #ffd75e; }
+.player-wrap { position: relative; }
+.player-overlay {
+  position: absolute; inset: 0; display: grid; place-items: center; text-align: center;
+  padding: 16px; color: var(--muted); background: rgba(0, 0, 0, 0.55); border-radius: var(--radius);
+}
+.unmute { position: absolute; left: 12px; bottom: 12px; }
+.mirror { transform: scaleX(-1); }
+.panel { padding: 16px; border-radius: var(--radius); background: var(--panel); }
+.row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.share { display: flex; gap: 8px; }
+.share input { flex: 1; min-width: 0; }
+select {
+  padding: 10px 12px; border-radius: 8px; border: 1px solid var(--panel-2);
+  background: var(--panel); color: var(--text); font: inherit;
+}
+.check { display: flex; flex-direction: row; align-items: center; gap: 8px; font-weight: 500; }
+.notice { padding: 12px 14px; border-radius: 8px; background: #3a2f10; color: #ffd75e; font-size: 14px; line-height: 1.5; }
+
+.btn { white-space: nowrap; }
+@media (max-width: 420px) {
+  .header-actions .btn { padding: 8px 10px; font-size: 13px; }
+}
+
 @media (max-width: 600px) {
   header, main { padding-left: 16px; padding-right: 16px; }
 }

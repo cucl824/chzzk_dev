@@ -1,0 +1,367 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>라이브 시작</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <a class="logo" href="/">VOD</a>
+    <a class="btn secondary" href="/">목록</a>
+  </header>
+  <main>
+    <h1>휴대폰 라이브 송출</h1>
+
+    <p id="insecure" class="notice" hidden>
+      이 주소는 HTTPS가 아니라서 브라우저가 카메라·마이크를 막습니다.
+      휴대폰에서는 <b>https://</b> 주소로 접속하세요. (README의 "휴대폰 연결" 참고)
+    </p>
+
+    <div class="player-wrap">
+      <video id="preview" class="player" autoplay muted playsinline></video>
+      <div id="previewOverlay" class="player-overlay">카메라를 켜면 미리보기가 나옵니다.</div>
+    </div>
+
+    <div class="status-line">
+      <span id="statusPill" class="status-pill">대기</span>
+      <span id="elapsed" class="muted"></span>
+      <span id="viewers" class="muted"></span>
+    </div>
+
+    <!-- 방송 전 설정 -->
+    <form id="setup" class="panel">
+      <label>방송 제목
+        <input type="text" name="title" maxlength="100" required placeholder="예) 동네 산책 라이브">
+      </label>
+      <div class="row">
+        <select name="facing" aria-label="카메라">
+          <option value="user">전면 카메라</option>
+          <option value="environment">후면 카메라</option>
+        </select>
+        <button type="button" class="btn secondary" id="cameraBtn">카메라·마이크 켜기</button>
+      </div>
+      <label class="check">
+        <input type="checkbox" name="record" checked>
+        방송 종료 후 녹화본을 다시보기로 저장
+      </label>
+      <p id="setupError" class="error" hidden></p>
+      <div><button class="btn live" id="startBtn" type="submit" disabled>방송 시작</button></div>
+    </form>
+
+    <!-- 방송 중 -->
+    <section id="onAir" class="panel" hidden>
+      <p class="muted" style="margin-top:0">아래 주소를 다른 기기에서 열면 시청할 수 있습니다. 화면을 끄거나 다른 앱으로 전환하면 송출이 멈출 수 있습니다.</p>
+      <div class="share">
+        <input type="text" id="shareUrl" readonly>
+        <button type="button" class="btn secondary" id="copyBtn">복사</button>
+      </div>
+      <div class="row" style="margin-top:12px">
+        <button type="button" class="btn secondary" id="micBtn">마이크 끄기</button>
+        <button type="button" class="btn danger" id="endBtn">방송 종료</button>
+      </div>
+    </section>
+
+    <!-- 종료 후 -->
+    <section id="finished" class="panel" hidden>
+      <p id="finishedText" style="margin-top:0">방송이 종료되었습니다.</p>
+      <progress id="uploadProgress" max="100" value="0" hidden></progress>
+      <p id="vodLink" hidden></p>
+      <div class="row">
+        <a class="btn" href="/live-start.html">새 방송 시작</a>
+        <a class="btn secondary" href="/">목록으로</a>
+      </div>
+    </section>
+  </main>
+  <script src="/common.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const setup = $('setup');
+    const preview = $('preview');
+
+    let stream = null;        // 카메라+마이크 MediaStream
+    let live = null;          // 시작된 라이브 정보
+    let token = null;         // 송출 토큰 (종료·녹화본 등록에 사용)
+    let ws = null;
+    let iceConfig = null;
+    let finished = false;
+    let ending = false;       // 종료 버튼을 눌러 서버에 종료 요청 중
+    let recorder = null;
+    let chunks = [];
+    let wakeLock = null;
+    let elapsedTimer = null;
+    const peers = new Map();  // viewerId → RTCPeerConnection
+
+    if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+      $('insecure').hidden = false;
+    }
+
+    function setStatus(text, kind) {
+      const pill = $('statusPill');
+      pill.textContent = text;
+      pill.className = `status-pill${kind ? ` ${kind}` : ''}`;
+    }
+
+    function showSetupError(text) {
+      $('setupError').textContent = text;
+      $('setupError').hidden = false;
+    }
+
+    // ---- 1. 카메라·마이크 ----
+    async function openCamera() {
+      $('setupError').hidden = true;
+      if (!navigator.mediaDevices?.getUserMedia) {
+        showSetupError('이 브라우저(또는 http 주소)에서는 카메라를 사용할 수 없습니다. https 주소로 접속하세요.');
+        return;
+      }
+      stream?.getTracks().forEach((t) => t.stop());
+      const facing = setup.facing.value;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: facing, width: { ideal: 1280 }, height: { ideal: 720 } },
+          audio: { echoCancellation: true, noiseSuppression: true },
+        });
+      } catch (err) {
+        stream = null;
+        $('startBtn').disabled = true;
+        const reason = err.name === 'NotAllowedError'
+          ? '카메라·마이크 권한이 거부되었습니다. 브라우저 주소창의 권한 설정에서 허용한 뒤 다시 눌러 주세요.'
+          : err.name === 'NotFoundError' ? '사용할 수 있는 카메라나 마이크가 없습니다.'
+          : `카메라를 켤 수 없습니다: ${err.message}`;
+        showSetupError(reason);
+        return;
+      }
+      preview.srcObject = stream;
+      preview.classList.toggle('mirror', facing === 'user');
+      $('previewOverlay').hidden = true;
+      $('cameraBtn').textContent = '카메라 다시 켜기';
+      $('startBtn').disabled = false;
+      setStatus('준비됨');
+    }
+
+    $('cameraBtn').addEventListener('click', openCamera);
+    setup.facing.addEventListener('change', () => { if (stream) openCamera(); });
+
+    // ---- 2. 방송 시작 ----
+    setup.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      if (!stream) return showSetupError('먼저 카메라·마이크를 켜세요.');
+      $('startBtn').disabled = true;
+      try {
+        iceConfig = await rtcConfig();
+        const res = await api('/api/lives', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title: setup.title.value.trim() }),
+        });
+        live = res.live;
+        token = res.publisherToken;
+      } catch (err) {
+        $('startBtn').disabled = false;
+        return showSetupError(err.message);
+      }
+
+      setup.hidden = true;
+      $('onAir').hidden = false;
+      $('shareUrl').value = `${location.origin}/live.html?id=${live.id}`;
+      document.title = `🔴 ${live.title} - 라이브`;
+      elapsedTimer = setInterval(() => { $('elapsed').textContent = formatElapsed(live.startedAt); }, 1000);
+      if (setup.record.checked) startRecording();
+      keepScreenOn();
+      connect();
+    });
+
+    // ---- 3. 시그널링 (WebSocket) ----
+    function send(message) {
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+    }
+
+    function connect() {
+      setStatus('연결 중…', 'wait');
+      ws = new WebSocket(wsUrl(`/ws/lives/${live.id}`));
+      let queue = Promise.resolve();
+      ws.onopen = () => send({ type: 'publish', token });
+      // 메시지를 도착 순서대로 하나씩 처리한다. (offer 처리 중 도착한 ICE 후보가 먼저 적용되지 않도록)
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        queue = queue.then(() => handle(msg)).catch((err) => console.warn('시그널링 처리 실패', err));
+      };
+      ws.onclose = () => {
+        if (finished || ending) return;
+        // 네트워크가 잠깐 끊겨도 서버가 유예 시간 동안 방송을 유지하므로 다시 연결한다.
+        closeAllPeers();
+        setStatus('재연결 중…', 'wait');
+        setTimeout(() => { if (!finished) connect(); }, 2000);
+      };
+    }
+
+    async function handle(msg) {
+      switch (msg.type) {
+        case 'published':
+          setStatus('● 방송 중', 'live');
+          break;
+        case 'viewer-joined':
+          await connectViewer(msg.viewerId);
+          break;
+        case 'answer':
+          await peers.get(msg.from)?.setRemoteDescription(msg.sdp);
+          break;
+        case 'ice':
+          if (msg.candidate) await peers.get(msg.from)?.addIceCandidate(msg.candidate);
+          break;
+        case 'viewer-left':
+          peers.get(msg.viewerId)?.close();
+          peers.delete(msg.viewerId);
+          break;
+        case 'viewers':
+          $('viewers').textContent = `시청자 ${msg.count}명`;
+          break;
+        case 'ended':
+          // 서버 쪽에서 종료된 경우(예: 연결이 오래 끊김)
+          if (!finished && !ending) finish('연결이 오래 끊겨 서버에서 방송이 종료되었습니다.');
+          break;
+        case 'error':
+          finished = true;
+          setStatus('오류');
+          alert(msg.error);
+          break;
+      }
+    }
+
+    // 시청자 한 명마다 RTCPeerConnection 을 만들어 카메라·마이크 트랙을 보낸다.
+    async function connectViewer(viewerId) {
+      peers.get(viewerId)?.close();
+      const pc = new RTCPeerConnection(iceConfig);
+      peers.set(viewerId, pc);
+      stream.getTracks().forEach((track) => pc.addTrack(track, stream));
+      pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'ice', to: viewerId, candidate: e.candidate }); };
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      send({ type: 'offer', to: viewerId, sdp: pc.localDescription });
+    }
+
+    function closeAllPeers() {
+      peers.forEach((pc) => pc.close());
+      peers.clear();
+    }
+
+    // ---- 4. 녹화 (종료 후 다시보기로 등록) ----
+    function startRecording() {
+      if (!window.MediaRecorder) return;
+      const type = ['video/webm;codecs=vp8,opus', 'video/webm', 'video/mp4']
+        .find((t) => MediaRecorder.isTypeSupported(t));
+      try {
+        recorder = new MediaRecorder(stream, type ? { mimeType: type } : undefined);
+      } catch {
+        recorder = null;
+        return;
+      }
+      chunks = [];
+      recorder.ondataavailable = (e) => { if (e.data.size) chunks.push(e.data); };
+      recorder.start(1000);
+    }
+
+    function stopRecording() {
+      return new Promise((resolve) => {
+        if (!recorder || recorder.state === 'inactive') return resolve(null);
+        recorder.onstop = () => resolve(new Blob(chunks, { type: recorder.mimeType || 'video/webm' }));
+        recorder.stop();
+      });
+    }
+
+    function uploadRecording(blob) {
+      const text = $('finishedText');
+      const progress = $('uploadProgress');
+      const ext = blob.type.includes('mp4') ? 'mp4' : 'webm';
+      const data = new FormData();
+      data.append('video', new File([blob], `live-${live.id}.${ext}`, { type: blob.type.split(';')[0] }));
+      const xhr = new XMLHttpRequest();
+      xhr.open('POST', `/api/lives/${live.id}/recording`);
+      xhr.setRequestHeader('X-Publisher-Token', token);
+      xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) progress.value = Math.round((ev.loaded / ev.total) * 100); };
+      xhr.onload = () => {
+        progress.hidden = true;
+        let body = {};
+        try { body = JSON.parse(xhr.responseText); } catch { /* 빈 응답 */ }
+        if (xhr.status === 200 && body.live?.vodBroadcastId) {
+          text.textContent = '방송이 종료되었고 녹화본이 다시보기로 저장되었습니다.';
+          const link = $('vodLink');
+          link.replaceChildren(el('a', { class: 'btn', href: `/watch.html?id=${body.live.vodBroadcastId}` }, '다시보기 보기'));
+          link.hidden = false;
+        } else {
+          text.textContent = `방송은 종료되었지만 녹화본 저장에 실패했습니다: ${body.error || xhr.status}`;
+        }
+      };
+      xhr.onerror = () => {
+        progress.hidden = true;
+        text.textContent = '방송은 종료되었지만 네트워크 오류로 녹화본을 저장하지 못했습니다.';
+      };
+      text.textContent = '방송이 종료되었습니다. 녹화본을 업로드하는 중…';
+      progress.hidden = false;
+      xhr.send(data);
+    }
+
+    // ---- 5. 방송 종료 ----
+    async function finish(message) {
+      if (finished) return;
+      finished = true;
+      clearInterval(elapsedTimer);
+      setStatus('방송 종료');
+      ws?.close();
+      closeAllPeers();
+      const blob = await stopRecording();
+      stream?.getTracks().forEach((t) => t.stop());
+      preview.srcObject = null;
+      $('previewOverlay').textContent = '방송이 종료되었습니다.';
+      $('previewOverlay').hidden = false;
+      wakeLock?.release().catch(() => {});
+      $('onAir').hidden = true;
+      $('finished').hidden = false;
+      $('finishedText').textContent = message;
+      if (blob && blob.size) uploadRecording(blob);
+    }
+
+    $('endBtn').addEventListener('click', async () => {
+      if (!confirm('방송을 종료할까요?')) return;
+      $('endBtn').disabled = true;
+      ending = true;
+      try {
+        await api(`/api/lives/${live.id}/end`, { method: 'POST', headers: { 'X-Publisher-Token': token } });
+      } catch (err) {
+        // 이미 서버에서 종료된 경우에도 화면은 종료 처리한다.
+        console.warn(err);
+      }
+      finish('방송이 종료되었습니다.');
+    });
+
+    $('micBtn').addEventListener('click', () => {
+      const audio = stream?.getAudioTracks()[0];
+      if (!audio) return;
+      audio.enabled = !audio.enabled;
+      $('micBtn').textContent = audio.enabled ? '마이크 끄기' : '마이크 켜기';
+    });
+
+    $('copyBtn').addEventListener('click', async () => {
+      try {
+        await navigator.clipboard.writeText($('shareUrl').value);
+        $('copyBtn').textContent = '복사됨';
+      } catch {
+        $('shareUrl').select();
+      }
+    });
+
+    // 방송 중 화면이 꺼지면 휴대폰이 카메라를 멈추므로, 지원하는 브라우저에서는 화면 켜짐을 유지한다.
+    async function keepScreenOn() {
+      try { wakeLock = await navigator.wakeLock?.request('screen'); } catch { /* 미지원 */ }
+    }
+    document.addEventListener('visibilitychange', () => {
+      if (document.visibilityState === 'visible' && live && !finished) keepScreenOn();
+    });
+
+    window.addEventListener('beforeunload', (e) => {
+      if (live && !finished) e.preventDefault();
+    });
+  </script>
+</body>
+</html>

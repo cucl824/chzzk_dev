@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>라이브</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <a class="logo" href="/">VOD</a>
+    <div class="header-actions">
+      <a class="btn live" href="/live-start.html">라이브 시작</a>
+      <a class="btn" href="/upload.html">방송 등록</a>
+    </div>
+  </header>
+  <main>
+    <p id="loadStatus" class="muted">불러오는 중…</p>
+    <section id="detail" hidden>
+      <div class="player-wrap">
+        <video id="player" class="player" autoplay muted playsinline controls></video>
+        <div id="overlay" class="player-overlay">연결 중…</div>
+        <button type="button" id="unmuteBtn" class="btn unmute" hidden>🔇 소리 켜기</button>
+      </div>
+      <h1 id="title" class="detail-title"></h1>
+      <div class="status-line">
+        <span id="statusPill" class="status-pill">연결 중</span>
+        <span id="elapsed" class="muted"></span>
+        <span id="viewers" class="muted"></span>
+      </div>
+      <p id="vodLink" hidden></p>
+    </section>
+    <p><a class="btn secondary" href="/">← 목록으로</a></p>
+  </main>
+  <script src="/common.js"></script>
+  <script>
+    const $ = (id) => document.getElementById(id);
+    const player = $('player');
+    const overlay = $('overlay');
+    const id = new URLSearchParams(location.search).get('id');
+
+    let live = null;
+    let ws = null;
+    let pc = null;
+    let iceConfig = null;
+    let ended = false;
+    let elapsedTimer = null;
+
+    function setStatus(text, kind) {
+      const pill = $('statusPill');
+      pill.textContent = text;
+      pill.className = `status-pill${kind ? ` ${kind}` : ''}`;
+    }
+
+    function showOverlay(text) {
+      overlay.textContent = text;
+      overlay.hidden = !text;
+    }
+
+    function showVodLink() {
+      if (!live.vodBroadcastId) return;
+      $('vodLink').replaceChildren(el('a', { class: 'btn', href: `/watch.html?id=${live.vodBroadcastId}` }, '다시보기 보기'));
+      $('vodLink').hidden = false;
+    }
+
+    // 방송 종료 상태 표시. 녹화본은 송출자가 종료 직후 올리므로 잠시 뒤 한 번 더 확인한다.
+    function showEnded() {
+      ended = true;
+      clearInterval(elapsedTimer);
+      pc?.close();
+      pc = null;
+      player.srcObject = null;
+      player.controls = false;
+      $('unmuteBtn').hidden = true;
+      setStatus('방송 종료');
+      $('viewers').textContent = '';
+      $('elapsed').textContent = live.endedAt ? `${formatElapsed(live.startedAt, live.endedAt)} 방송` : '';
+      showOverlay('방송이 종료되었습니다.');
+      document.title = `${live.title} - 종료된 라이브`;
+      showVodLink();
+    }
+
+    async function refreshEnded(retries) {
+      try {
+        live = (await api(`/api/lives/${encodeURIComponent(id)}`)).live;
+      } catch { return; }
+      showEnded();
+      if (!live.vodBroadcastId && retries > 0) setTimeout(() => refreshEnded(retries - 1), 5000);
+    }
+
+    function send(message) {
+      if (ws?.readyState === WebSocket.OPEN) ws.send(JSON.stringify(message));
+    }
+
+    function connect() {
+      ws = new WebSocket(wsUrl(`/ws/lives/${live.id}`));
+      let queue = Promise.resolve();
+      ws.onopen = () => send({ type: 'watch' });
+      ws.onmessage = (ev) => {
+        const msg = JSON.parse(ev.data);
+        queue = queue.then(() => handle(msg)).catch((err) => console.warn('시그널링 처리 실패', err));
+      };
+      ws.onclose = () => {
+        if (ended) return;
+        setStatus('재연결 중…', 'wait');
+        setTimeout(() => { if (!ended) connect(); }, 2000);
+      };
+    }
+
+    async function handle(msg) {
+      switch (msg.type) {
+        case 'welcome':
+          if (!msg.publisherOnline) {
+            setStatus('송출자 연결 대기', 'wait');
+            showOverlay('송출자의 연결을 기다리는 중입니다…');
+          }
+          break;
+        case 'offer':
+          await answer(msg.sdp);
+          break;
+        case 'ice':
+          if (pc && msg.candidate) await pc.addIceCandidate(msg.candidate);
+          break;
+        case 'viewers':
+          $('viewers').textContent = `시청자 ${msg.count}명`;
+          break;
+        case 'publisher-left':
+          setStatus('송출자 연결 대기', 'wait');
+          showOverlay('송출자의 연결이 끊겼습니다. 다시 연결되기를 기다리는 중…');
+          break;
+        case 'publisher-back':
+          setStatus('연결 중…', 'wait');
+          break;
+        case 'full':
+          ended = true;
+          setStatus('입장 불가');
+          showOverlay(`시청자가 가득 찼습니다. (최대 ${msg.max}명)`);
+          break;
+        case 'ended':
+          showEnded();
+          refreshEnded(6);
+          break;
+      }
+    }
+
+    // 송출자의 offer 를 받아 새 연결을 만들고 answer 를 돌려준다. (송출자가 재접속하면 다시 받는다)
+    async function answer(sdp) {
+      pc?.close();
+      pc = new RTCPeerConnection(iceConfig);
+      pc.ontrack = (e) => {
+        if (player.srcObject !== e.streams[0]) player.srcObject = e.streams[0];
+      };
+      pc.onicecandidate = (e) => { if (e.candidate) send({ type: 'ice', candidate: e.candidate }); };
+      pc.onconnectionstatechange = () => {
+        if (!pc || ended) return;
+        if (pc.connectionState === 'connected') {
+          setStatus('● LIVE', 'live');
+          showOverlay('');
+          $('unmuteBtn').hidden = !player.muted;
+        } else if (pc.connectionState === 'failed') {
+          setStatus('연결 실패');
+          showOverlay('영상 연결에 실패했습니다. 서로 다른 네트워크라면 TURN 서버 설정이 필요할 수 있습니다. (README 참고)');
+        }
+      };
+      await pc.setRemoteDescription(sdp);
+      const desc = await pc.createAnswer();
+      await pc.setLocalDescription(desc);
+      send({ type: 'answer', sdp: pc.localDescription });
+    }
+
+    // 브라우저 자동재생 정책 때문에 처음에는 음소거로 재생하고, 버튼으로 소리를 켠다.
+    $('unmuteBtn').addEventListener('click', () => {
+      player.muted = false;
+      player.play().catch(() => {});
+      $('unmuteBtn').hidden = true;
+    });
+    player.addEventListener('volumechange', () => { $('unmuteBtn').hidden = !player.muted || ended; });
+
+    (async () => {
+      try {
+        if (!id) throw new Error('잘못된 주소입니다.');
+        live = (await api(`/api/lives/${encodeURIComponent(id)}`)).live;
+      } catch (err) {
+        $('loadStatus').textContent = err.message;
+        $('loadStatus').className = 'error';
+        return;
+      }
+      $('loadStatus').hidden = true;
+      $('detail').hidden = false;
+      $('title').textContent = live.title;
+
+      if (live.status !== 'live') {
+        showEnded();
+        return;
+      }
+      document.title = `🔴 ${live.title} - 라이브`;
+      elapsedTimer = setInterval(() => { $('elapsed').textContent = formatElapsed(live.startedAt); }, 1000);
+      iceConfig = await rtcConfig();
+      connect();
+    })();
+  </script>
+</body>
+</html>

@@ -55,3 +55,33 @@ function formatSize(bytes) {
   while (bytes >= 1024 && i < units.length - 1) { bytes /= 1024; i++; }
   return `${bytes.toFixed(i ? 1 : 0)}${units[i]}`;
 }
+
+// ---- 라이브 공통 ----
+
+// 현재 페이지가 https 면 wss, 아니면 ws 로 같은 서버에 접속한다.
+function wsUrl(path) {
+  return `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}${path}`;
+}
+
+// 서버가 내려주는 STUN/TURN 설정 (RTCPeerConnection 생성용)
+async function rtcConfig() {
+  try {
+    return await api('/api/rtc-config');
+  } catch {
+    return { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
+  }
+}
+
+// 01:23:45 형식의 방송 경과 시간
+function formatElapsed(fromIso, toIso) {
+  const sec = Math.max(0, Math.floor(((toIso ? new Date(toIso) : new Date()) - new Date(fromIso)) / 1000));
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(Math.floor(sec / 3600))}:${pad(Math.floor(sec / 60) % 60)}:${pad(sec % 60)}`;
+}
+
+// 방송 상태 배지: live → 빨간 LIVE, ended → 회색 종료
+function statusBadge(status) {
+  return status === 'live'
+    ? el('span', { class: 'badge live' }, '● LIVE')
+    : el('span', { class: 'badge ended' }, '종료');
+}

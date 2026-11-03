@@ -7,6 +7,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.converter.HttpMessageNotReadableException;
 import org.springframework.web.HttpMediaTypeNotSupportedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -36,9 +37,10 @@ public class GlobalExceptionHandler {
 		return error(HttpStatus.BAD_REQUEST, "파일은 " + maxUploadMb + "MB 이하만 업로드할 수 있습니다.");
 	}
 
-	@ExceptionHandler({ MultipartException.class, HttpMediaTypeNotSupportedException.class })
+	@ExceptionHandler({ MultipartException.class, HttpMediaTypeNotSupportedException.class,
+			HttpMessageNotReadableException.class })
 	public ResponseEntity<Map<String, String>> handleBadForm(Exception e) {
-		return error(HttpStatus.BAD_REQUEST, "등록 요청은 multipart/form-data 형식이어야 합니다.");
+		return error(HttpStatus.BAD_REQUEST, "요청 형식이 올바르지 않습니다.");
 	}
 
 	@ExceptionHandler(NoResourceFoundException.class)

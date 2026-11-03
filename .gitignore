@@ -14,3 +14,7 @@ out/
 .env
 data/
 uploads/
+
+# 개발용 HTTPS 인증서
+certs/
+*.p12

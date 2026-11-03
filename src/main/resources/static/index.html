@@ -3,22 +3,66 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>다시보기 목록</title>
+  <title>방송 목록</title>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
   <header>
     <a class="logo" href="/">VOD</a>
-    <a class="btn" href="/upload.html">방송 등록</a>
+    <div class="header-actions">
+      <a class="btn live" href="/live-start.html">라이브 시작</a>
+      <a class="btn" href="/upload.html">방송 등록</a>
+    </div>
   </header>
   <main>
-    <h1>다시보기</h1>
+    <h2 class="section-title">지금 라이브</h2>
+    <div id="liveList" class="grid"></div>
+
+    <h2 class="section-title">다시보기</h2>
     <p id="status" class="muted">불러오는 중…</p>
     <div id="list" class="grid"></div>
+
+    <section id="endedSection" hidden>
+      <h2 class="section-title">종료된 라이브</h2>
+      <div id="endedList" class="grid"></div>
+    </section>
   </main>
   <script src="/common.js"></script>
   <script>
-    (async () => {
+    function liveCard(live) {
+      const on = live.status === 'live';
+      const meta = on
+        ? `시청자 ${live.viewerCount}명 · ${formatElapsed(live.startedAt)} 방송 중`
+        : `${formatDate(live.startedAt)} · ${formatElapsed(live.startedAt, live.endedAt)} 방송${live.vodBroadcastId ? ' · 다시보기 있음' : ''}`;
+      return el('a', { class: 'card', href: `/live.html?id=${encodeURIComponent(live.id)}` },
+        el('div', { class: 'thumb' },
+          el('div', { class: `live-thumb${on ? ' on' : ''}` }, on ? '휴대폰 라이브' : '방송 종료'),
+          statusBadge(live.status),
+        ),
+        el('div', { class: 'card-title', title: live.title }, live.title),
+        el('div', { class: 'card-meta' }, meta),
+      );
+    }
+
+    // 라이브 목록은 상태가 바뀌므로 주기적으로 다시 불러온다.
+    async function loadLives() {
+      const liveList = document.getElementById('liveList');
+      const endedList = document.getElementById('endedList');
+      try {
+        const { lives } = await api('/api/lives');
+        const onAir = lives.filter((l) => l.status === 'live');
+        const ended = lives.filter((l) => l.status === 'ended').slice(0, 12);
+        liveList.replaceChildren(...(onAir.length
+          ? onAir.map(liveCard)
+          : [el('div', { class: 'empty' }, '지금 방송 중인 라이브가 없습니다. 휴대폰으로 라이브를 시작해 보세요.')]));
+        endedList.replaceChildren(...ended.map(liveCard));
+        document.getElementById('endedSection').hidden = !ended.length;
+      } catch (err) {
+        liveList.replaceChildren(el('p', { class: 'error' }, err.message));
+      }
+    }
+
+    async function loadVods() {
       const status = document.getElementById('status');
       const list = document.getElementById('list');
       try {
@@ -46,7 +90,11 @@
         status.textContent = err.message;
         status.className = 'error';
       }
-    })();
+    }
+
+    loadLives();
+    loadVods();
+    setInterval(loadLives, 5000);
   </script>
 </body>
 </html>
