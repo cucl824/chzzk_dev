@@ -8,7 +8,11 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+
+import dev.chzzk.vod.user.User;
 
 /** 녹화 방송 메타데이터. 영상 자체는 파일/외부 URL에 있고 여기에는 위치(videoUrl)만 저장한다. */
 @Entity
@@ -48,10 +52,16 @@ public class Broadcast {
 	@Column(nullable = false)
 	private Instant createdAt;
 
+	/** 등록한 회원. 1·2단계(로그인 도입 전)에 등록된 방송은 null 이며 아무도 수정·삭제할 수 없다. */
+	@ManyToOne
+	@JoinColumn(name = "owner_id")
+	private User owner;
+
 	protected Broadcast() {
 	}
 
-	private Broadcast(String title, String description, SourceType sourceType, String videoUrl) {
+	private Broadcast(User owner, String title, String description, SourceType sourceType, String videoUrl) {
+		this.owner = owner;
 		this.id = UUID.randomUUID().toString();
 		this.title = title;
 		this.description = description;
@@ -60,17 +70,30 @@ public class Broadcast {
 		this.createdAt = Instant.now();
 	}
 
-	public static Broadcast ofUpload(String title, String description, String videoUrl, String fileName,
+	public static Broadcast ofUpload(User owner, String title, String description, String videoUrl, String fileName,
 			String mimeType, long size) {
-		Broadcast broadcast = new Broadcast(title, description, SourceType.UPLOAD, videoUrl);
+		Broadcast broadcast = new Broadcast(owner, title, description, SourceType.UPLOAD, videoUrl);
 		broadcast.fileName = fileName;
 		broadcast.mimeType = mimeType;
 		broadcast.size = size;
 		return broadcast;
 	}
 
-	public static Broadcast ofUrl(String title, String description, String videoUrl) {
-		return new Broadcast(title, description, SourceType.URL, videoUrl);
+	public static Broadcast ofUrl(User owner, String title, String description, String videoUrl) {
+		return new Broadcast(owner, title, description, SourceType.URL, videoUrl);
+	}
+
+	public void update(String title, String description) {
+		this.title = title;
+		this.description = description;
+	}
+
+	public boolean isOwnedBy(Long userId) {
+		return owner != null && owner.getId().equals(userId);
+	}
+
+	public User getOwner() {
+		return owner;
 	}
 
 	public String getId() {

@@ -29,6 +29,18 @@
         <span id="viewers" class="muted"></span>
       </div>
       <p id="vodLink" hidden></p>
+
+      <!-- 방송 소유자에게만 보이는 송출 제어. 서버도 소유자인지 검사한다 (다른 사용자 → 403) -->
+      <section id="ownerPanel" class="panel owner-panel" hidden>
+        <div class="row">
+          <span class="muted">내 방송</span>
+          <button type="button" class="btn danger" id="ownerEndBtn" hidden>방송 종료</button>
+          <button type="button" class="btn secondary" id="ownerDeleteBtn" hidden>기록 삭제</button>
+        </div>
+        <p id="ownerError" class="error" hidden></p>
+      </section>
+
+      <section id="comments"></section>
     </section>
     <p><a class="btn secondary" href="/">← 목록으로</a></p>
   </main>
@@ -78,7 +90,36 @@
       showOverlay('방송이 종료되었습니다.');
       document.title = `${live.title} - 종료된 라이브`;
       showVodLink();
+      updateOwnerPanel();
     }
+
+    // 소유자: 방송 중이면 종료, 종료 후에는 기록 삭제
+    async function updateOwnerPanel() {
+      const user = await currentUser();
+      if (!user || live.owner?.id !== user.id) return;
+      $('ownerPanel').hidden = false;
+      $('ownerEndBtn').hidden = ended;
+      $('ownerDeleteBtn').hidden = !ended;
+    }
+
+    function showOwnerError(err) {
+      $('ownerError').textContent = err.message;
+      $('ownerError').hidden = false;
+    }
+
+    $('ownerEndBtn').addEventListener('click', async () => {
+      if (!confirm('송출 중인 방송을 종료할까요?')) return;
+      try {
+        await api(`/api/lives/${encodeURIComponent(live.id)}/end`, { method: 'POST' });
+      } catch (err) { showOwnerError(err); }
+    });
+    $('ownerDeleteBtn').addEventListener('click', async () => {
+      if (!confirm('이 라이브 기록과 댓글을 삭제할까요? (다시보기는 남습니다)')) return;
+      try {
+        await api(`/api/lives/${encodeURIComponent(live.id)}`, { method: 'DELETE' });
+        location.href = '/';
+      } catch (err) { showOwnerError(err); }
+    });
 
     async function refreshEnded(retries) {
       try {
@@ -188,6 +229,10 @@
       $('loadStatus').hidden = true;
       $('detail').hidden = false;
       $('title').textContent = live.title;
+      $('title').after(el('div', { class: 'muted' }, live.owner ? `방송 ${live.owner.nickname}` : '방송자 없음(이전 단계 기록)'));
+      // 라이브 중에는 채팅처럼 3초마다 새 댓글을 불러온다.
+      mountComments($('comments'), `/api/lives/${encodeURIComponent(live.id)}`, { pollMs: live.status === 'live' ? 3000 : 0 });
+      updateOwnerPanel();
 
       if (live.status !== 'live') {
         showEnded();

@@ -31,9 +31,10 @@
   <script>
     function liveCard(live) {
       const on = live.status === 'live';
-      const meta = on
+      const by = live.owner ? `${live.owner.nickname} · ` : '';
+      const meta = by + (on
         ? `시청자 ${live.viewerCount}명 · ${formatElapsed(live.startedAt)} 방송 중`
-        : `${formatDate(live.startedAt)} · ${formatElapsed(live.startedAt, live.endedAt)} 방송${live.vodBroadcastId ? ' · 다시보기 있음' : ''}`;
+        : `${formatDate(live.startedAt)} · ${formatElapsed(live.startedAt, live.endedAt)} 방송${live.vodBroadcastId ? ' · 다시보기 있음' : ''}`);
       return el('a', { class: 'card', href: `/live.html?id=${encodeURIComponent(live.id)}` },
         el('div', { class: 'thumb' },
           el('div', { class: `live-thumb${on ? ' on' : ''}` }, on ? '라이브 방송 중' : '방송 종료'),
@@ -82,7 +83,7 @@
             el('a', { class: 'card', href: `/watch.html?id=${encodeURIComponent(b.id)}` },
               el('div', { class: 'thumb' }, preview, el('span', { class: 'badge' }, '다시보기')),
               el('div', { class: 'card-title', title: b.title }, b.title),
-              el('div', { class: 'card-meta' }, `조회수 ${b.viewCount} · ${formatDate(b.createdAt)}`),
+              el('div', { class: 'card-meta' }, `${b.owner ? `${b.owner.nickname} · ` : ''}조회수 ${b.viewCount} · ${formatDate(b.createdAt)}`),
             ),
           );
         }

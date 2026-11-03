@@ -9,7 +9,9 @@
 <body>
   <header>
     <a class="logo" href="/">VOD</a>
-    <a class="btn secondary" href="/">목록</a>
+    <div class="header-actions">
+      <a class="btn secondary" href="/">목록</a>
+    </div>
   </header>
   <main>
     <h1>라이브 송출</h1>
@@ -95,7 +97,7 @@
     let sourceTracks = [];    // 종료 시 멈출 원본 트랙 (화면 공유 소리·마이크를 섞었을 때 원본 포함)
     let audioContext = null;  // 화면 소리 + 마이크 믹싱용
     let live = null;          // 시작된 라이브 정보
-    let token = null;         // 송출 토큰 (종료·녹화본 등록에 사용)
+    let token = null;         // 이 송출 화면의 토큰 (WebSocket 송출 연결에 사용. 종료·녹화본 등록은 로그인 세션으로 소유자 확인)
     let ws = null;
     let iceConfig = null;
     let finished = false;
@@ -105,6 +107,9 @@
     let wakeLock = null;
     let elapsedTimer = null;
     const peers = new Map();  // viewerId → RTCPeerConnection
+
+    // 방송 시작은 로그인 사용자만 (서버도 401 로 거절한다). 시작한 사람이 방송 소유자가 된다.
+    requireLogin();
 
     if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
       $('insecure').hidden = false;
@@ -285,6 +290,7 @@
         live = res.live;
         token = res.publisherToken;
       } catch (err) {
+        if (err.status === 401) { location.href = loginUrl(); return; }
         $('startBtn').disabled = false;
         return showSetupError(err.message);
       }
@@ -345,8 +351,8 @@
           $('viewers').textContent = `시청자 ${msg.count}명`;
           break;
         case 'ended':
-          // 서버 쪽에서 종료된 경우(예: 연결이 오래 끊김)
-          if (!finished && !ending) finish('연결이 오래 끊겨 서버에서 방송이 종료되었습니다.');
+          // 이 화면 밖에서 종료된 경우: 소유자가 다른 기기·시청 화면에서 종료했거나, 연결이 오래 끊겨 서버가 종료함
+          if (!finished && !ending) finish('방송이 종료되었습니다. (다른 화면에서 종료했거나 연결이 오래 끊겼습니다)');
           break;
         case 'error':
           finished = true;
@@ -405,7 +411,7 @@
       data.append('video', new File([blob], `live-${live.id}.${ext}`, { type: blob.type.split(';')[0] }));
       const xhr = new XMLHttpRequest();
       xhr.open('POST', `/api/lives/${live.id}/recording`);
-      xhr.setRequestHeader('X-Publisher-Token', token);
+      xhr.setRequestHeader('X-XSRF-TOKEN', csrfToken());
       xhr.upload.onprogress = (ev) => { if (ev.lengthComputable) progress.value = Math.round((ev.loaded / ev.total) * 100); };
       xhr.onload = () => {
         progress.hidden = true;
@@ -454,7 +460,7 @@
       $('endBtn').disabled = true;
       ending = true;
       try {
-        await api(`/api/lives/${live.id}/end`, { method: 'POST', headers: { 'X-Publisher-Token': token } });
+        await api(`/api/lives/${live.id}/end`, { method: 'POST' });
       } catch (err) {
         // 이미 서버에서 종료된 경우에도 화면은 종료 처리한다.
         console.warn(err);

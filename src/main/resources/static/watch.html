@@ -22,11 +22,73 @@
       <h1 id="title" class="detail-title"></h1>
       <div id="meta" class="muted"></div>
       <div id="desc" class="detail-desc" hidden></div>
+
+      <!-- 소유자에게만 보이는 관리 버튼. 실제 권한은 서버가 검사한다 (다른 사용자가 요청해도 403) -->
+      <section id="ownerPanel" class="panel owner-panel" hidden>
+        <div class="row">
+          <span class="muted">내 방송</span>
+          <button type="button" class="btn secondary" id="editBtn">수정</button>
+          <button type="button" class="btn danger" id="deleteBtn">삭제</button>
+        </div>
+        <form id="editForm" hidden>
+          <label>제목
+            <input type="text" name="title" maxlength="100" required>
+          </label>
+          <label>설명
+            <textarea name="description" maxlength="2000"></textarea>
+          </label>
+          <p id="editError" class="error" hidden></p>
+          <div class="row">
+            <button type="submit" class="btn">저장</button>
+            <button type="button" class="btn secondary" id="editCancel">취소</button>
+          </div>
+        </form>
+      </section>
+
+      <section id="comments"></section>
     </section>
     <p><a class="btn secondary" href="/">← 목록으로</a></p>
   </main>
   <script src="/common.js"></script>
   <script>
+    // 소유자 관리: 제목·설명 수정, 삭제
+    async function setupOwnerPanel(b) {
+      const user = await currentUser();
+      if (!user || b.owner?.id !== user.id) return;
+      const panel = document.getElementById('ownerPanel');
+      const form = document.getElementById('editForm');
+      const error = document.getElementById('editError');
+      panel.hidden = false;
+
+      document.getElementById('editBtn').addEventListener('click', () => {
+        form.title.value = b.title;
+        form.description.value = b.description;
+        form.hidden = false;
+      });
+      document.getElementById('editCancel').addEventListener('click', () => { form.hidden = true; });
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        error.hidden = true;
+        try {
+          await api(`/api/broadcasts/${encodeURIComponent(b.id)}`,
+            jsonRequest('PATCH', { title: form.title.value, description: form.description.value }));
+          location.reload();
+        } catch (err) {
+          error.textContent = err.message;
+          error.hidden = false;
+        }
+      });
+      document.getElementById('deleteBtn').addEventListener('click', async () => {
+        if (!confirm('이 방송을 삭제할까요? 영상 파일과 댓글도 함께 삭제됩니다.')) return;
+        try {
+          await api(`/api/broadcasts/${encodeURIComponent(b.id)}`, { method: 'DELETE' });
+          location.href = '/';
+        } catch (err) {
+          alert(err.message);
+        }
+      });
+    }
+
     (async () => {
       const status = document.getElementById('status');
       const id = new URLSearchParams(location.search).get('id');
@@ -41,7 +103,8 @@
         const renderMeta = (views) => {
           const source = b.sourceType === 'upload' ? `업로드 파일 ${formatSize(b.size)}`
             : ytId ? '유튜브 영상 연결' : '외부 영상 연결';
-          meta.textContent = [`조회수 ${views}`, formatDate(b.createdAt), source].join(' · ');
+          const owner = b.owner ? `등록 ${b.owner.nickname}` : '등록자 없음(이전 단계 데이터)';
+          meta.textContent = [owner, `조회수 ${views}`, formatDate(b.createdAt), source].join(' · ');
         };
         renderMeta(b.viewCount);
 
@@ -82,6 +145,8 @@
 
         status.hidden = true;
         document.getElementById('detail').hidden = false;
+        setupOwnerPanel(b);
+        mountComments(document.getElementById('comments'), `/api/broadcasts/${encodeURIComponent(b.id)}`);
       } catch (err) {
         status.textContent = err.message;
         status.className = 'error';

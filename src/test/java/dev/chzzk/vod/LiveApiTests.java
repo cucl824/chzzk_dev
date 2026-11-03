@@ -4,30 +4,23 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 import static org.junit.jupiter.api.Assertions.fail;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
-import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
-import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 import java.nio.file.Path;
 import java.util.Map;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicInteger;
 
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.boot.test.context.SpringBootTest;
-import org.springframework.boot.webmvc.test.autoconfigure.AutoConfigureMockMvc;
-import org.springframework.http.MediaType;
-import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
-import org.springframework.test.web.servlet.MockMvc;
 import org.springframework.web.socket.TextMessage;
+import org.springframework.web.socket.WebSocketHttpHeaders;
 import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.client.standard.StandardWebSocketClient;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
@@ -36,14 +29,17 @@ import com.jayway.jsonpath.JsonPath;
 
 import jakarta.websocket.ContainerProvider;
 import jakarta.websocket.WebSocketContainer;
-
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
-/** 라이브 시작·시그널링 중계·종료·녹화본 등록·자동 종료 통합 테스트 (실제 포트로 WebSocket 접속) */
+/**
+ * 라이브 시작·시그널링 중계·종료·녹화본·자동 종료(2단계)와 소유자 권한(3단계).
+ * 실제 포트로 띄워 로그인 세션 쿠키를 가진 HTTP·WebSocket 으로 접속한다.
+ */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
-@AutoConfigureMockMvc
 class LiveApiTests {
+
+	private static final AtomicInteger SEQ = new AtomicInteger();
 
 	@TempDir
 	static Path tempDir;
@@ -59,22 +55,27 @@ class LiveApiTests {
 	int port;
 
 	@Autowired
-	MockMvc mvc;
-
-	@Autowired
 	ObjectMapper mapper;
 
-	/** 받은 메시지를 큐에 쌓아두는 테스트용 WebSocket 클라이언트 */
+	private HttpApi user(String name) throws Exception {
+		return HttpApi.signedUp(port, name + SEQ.incrementAndGet());
+	}
+
+	/** 받은 메시지를 큐에 쌓아두는 테스트용 WebSocket 클라이언트 (로그인 세션 쿠키를 넣을 수 있음) */
 	class Client extends TextWebSocketHandler {
 		final BlockingQueue<Map<String, Object>> inbox = new LinkedBlockingQueue<>();
 		WebSocketSession session;
 
-		Client(String liveId) throws Exception {
+		Client(String liveId, HttpApi as) throws Exception {
 			// 브라우저처럼 큰 메시지를 받을 수 있도록 테스트 클라이언트 버퍼도 늘린다.
 			WebSocketContainer container = ContainerProvider.getWebSocketContainer();
 			container.setDefaultMaxTextMessageBufferSize(256 * 1024);
+			WebSocketHttpHeaders headers = new WebSocketHttpHeaders();
+			if (as != null) {
+				headers.add("Cookie", as.cookieHeader());
+			}
 			session = new StandardWebSocketClient(container)
-				.execute(this, "ws://localhost:" + port + "/ws/lives/" + liveId)
+				.execute(this, headers, java.net.URI.create("ws://localhost:" + port + "/ws/lives/" + liveId))
 				.get(5, TimeUnit.SECONDS);
 		}
 
@@ -101,26 +102,26 @@ class LiveApiTests {
 		}
 	}
 
-	private String[] startLive(String title) throws Exception {
-		String body = mvc.perform(post("/api/lives").contentType(MediaType.APPLICATION_JSON)
-			.content("{\"title\":\"" + title + "\"}"))
-			.andExpect(status().isCreated())
-			.andExpect(jsonPath("$.live.status").value("live"))
-			.andReturn().getResponse().getContentAsString();
-		return new String[] { JsonPath.read(body, "$.live.id"), JsonPath.read(body, "$.publisherToken") };
+	private String[] startLive(HttpApi owner, String title) throws Exception {
+		HttpApi.Res res = owner.postJson("/api/lives", "{\"title\":\"" + title + "\"}");
+		assertEquals(201, res.status(), res.body());
+		assertEquals("live", JsonPath.read(res.body(), "$.live.status"));
+		return new String[] { JsonPath.read(res.body(), "$.live.id"), JsonPath.read(res.body(), "$.publisherToken") };
 	}
 
 	@Test
 	void liveFlowRelaysSignalingAndEnds() throws Exception {
-		String[] started = startLive("휴대폰 라이브");
+		HttpApi owner = user("owner");
+		String[] started = startLive(owner, "휴대폰 라이브");
 		String id = started[0];
 		String token = started[1];
 
-		Client publisher = new Client(id);
+		Client publisher = new Client(id, owner);
 		publisher.send(Map.of("type", "publish", "token", token));
 		publisher.await("published");
 
-		Client viewer = new Client(id);
+		// 시청자는 비로그인도 가능
+		Client viewer = new Client(id, null);
 		viewer.send(Map.of("type", "watch"));
 		String viewerId = (String) viewer.await("welcome").get("viewerId");
 		assertEquals(viewerId, publisher.await("viewer-joined").get("viewerId"));
@@ -138,49 +139,100 @@ class LiveApiTests {
 		viewer.send(Map.of("type", "ice", "candidate", Map.of("candidate", "c")));
 		assertEquals(viewerId, publisher.await("ice").get("from"));
 
-		mvc.perform(get("/api/lives/" + id)).andExpect(jsonPath("$.live.viewerCount").value(1));
-		mvc.perform(get("/api/lives").param("status", "live")).andExpect(jsonPath("$.lives[0].id").value(id));
+		HttpApi anonymous = new HttpApi(port);
+		assertEquals(1, (int) JsonPath.read(anonymous.get("/api/lives/" + id).body(), "$.live.viewerCount"));
+		assertEquals(id, JsonPath.read(anonymous.get("/api/lives?status=live").body(), "$.lives[0].id"));
 
-		// 토큰 없이 종료·송출 불가
-		mvc.perform(post("/api/lives/" + id + "/end")).andExpect(status().isForbidden());
-		Client intruder = new Client(id);
-		intruder.send(Map.of("type", "publish", "token", "wrong"));
-		intruder.await("error");
-
-		mvc.perform(post("/api/lives/" + id + "/end").header("X-Publisher-Token", token))
-			.andExpect(status().isOk())
-			.andExpect(jsonPath("$.live.status").value("ended"))
-			.andExpect(jsonPath("$.live.endedAt").isNotEmpty());
+		endLive(owner, id);
 		viewer.await("ended");
 		publisher.await("ended");
 
-		// 종료 후 녹화본 → 다시보기로 등록되고 라이브와 연결
-		String body = mvc.perform(multipart("/api/lives/" + id + "/recording")
-			.file(new MockMultipartFile("video", "live.webm", "video/webm", new byte[500]))
-			.header("X-Publisher-Token", token))
-			.andExpect(status().isOk())
-			.andReturn().getResponse().getContentAsString();
-		String vodId = JsonPath.read(body, "$.live.vodBroadcastId");
+		// 종료 후 소유자의 녹화본 → 소유자의 다시보기로 등록되고 라이브와 연결
+		HttpApi.Res rec = owner.postFile("/api/lives/" + id + "/recording", "video", "live.webm", "video/webm",
+				new byte[500]);
+		assertEquals(200, rec.status(), rec.body());
+		String vodId = JsonPath.read(rec.body(), "$.live.vodBroadcastId");
 		assertNotNull(vodId);
-		mvc.perform(get("/api/broadcasts/" + vodId)).andExpect(jsonPath("$.broadcast.title").value("휴대폰 라이브"));
-		mvc.perform(multipart("/api/lives/" + id + "/recording")
-			.file(new MockMultipartFile("video", "live.webm", "video/webm", new byte[500]))
-			.header("X-Publisher-Token", token))
-			.andExpect(status().isConflict());
+		String vod = anonymous.get("/api/broadcasts/" + vodId).body();
+		assertEquals("휴대폰 라이브", JsonPath.read(vod, "$.broadcast.title"));
+		assertEquals((Object) JsonPath.read(rec.body(), "$.live.owner.id"), JsonPath.read(vod, "$.broadcast.owner.id"));
+		assertEquals(409, owner.postFile("/api/lives/" + id + "/recording", "video", "live.webm", "video/webm",
+				new byte[500]).status());
 
 		// 종료된 방송에 들어온 시청자는 바로 ended 를 받는다
-		Client late = new Client(id);
+		Client late = new Client(id, null);
 		late.send(Map.of("type", "watch"));
 		late.await("ended");
 	}
 
+	private static void endLive(HttpApi owner, String id) throws Exception {
+		HttpApi.Res end = owner.post("/api/lives/" + id + "/end");
+		assertEquals(200, end.status(), end.body());
+		assertEquals("ended", JsonPath.read(end.body(), "$.live.status"));
+	}
+
+	@Test
+	void onlyOwnerControlsBroadcast() throws Exception {
+		HttpApi owner = user("owner");
+		HttpApi other = user("other");
+		HttpApi anonymous = new HttpApi(port);
+
+		// 비로그인은 방송을 시작할 수 없다
+		assertEquals(401, anonymous.postJson("/api/lives", "{\"title\":\"익명\"}").status());
+
+		String[] started = startLive(owner, "소유자 방송");
+		String id = started[0];
+		String token = started[1];
+
+		// 송출 연결: 비로그인·다른 사용자는 토큰을 알아도 거절, 소유자만 허용
+		Client anonPublisher = new Client(id, null);
+		anonPublisher.send(Map.of("type", "publish", "token", token));
+		anonPublisher.await("error");
+		Client otherPublisher = new Client(id, other);
+		otherPublisher.send(Map.of("type", "publish", "token", token));
+		otherPublisher.await("error");
+		Client wrongToken = new Client(id, owner);
+		wrongToken.send(Map.of("type", "publish", "token", "wrong"));
+		wrongToken.await("error");
+		Client publisher = new Client(id, owner);
+		publisher.send(Map.of("type", "publish", "token", token));
+		publisher.await("published");
+
+		// 제목 수정·종료·삭제: 비로그인 401, 다른 사용자 403
+		assertEquals(401, anonymous.patchJson("/api/lives/" + id, "{\"title\":\"x\"}").status());
+		assertEquals(403, other.patchJson("/api/lives/" + id, "{\"title\":\"x\"}").status());
+		assertEquals(401, anonymous.post("/api/lives/" + id + "/end").status());
+		HttpApi.Res denied = other.post("/api/lives/" + id + "/end");
+		assertEquals(403, denied.status());
+		assertEquals("이 방송의 소유자만 송출을 제어할 수 있습니다.", JsonPath.read(denied.body(), "$.error"));
+		assertEquals("live", JsonPath.read(anonymous.get("/api/lives/" + id).body(), "$.live.status"));
+
+		// 소유자: 제목 수정 → 방송 중 삭제는 409 → 종료 → 삭제
+		HttpApi.Res renamed = owner.patchJson("/api/lives/" + id, "{\"title\":\"바뀐 제목\"}");
+		assertEquals("바뀐 제목", JsonPath.read(renamed.body(), "$.live.title"));
+		assertEquals(409, owner.delete("/api/lives/" + id).status());
+		endLive(owner, id);
+		assertEquals(403, other.delete("/api/lives/" + id).status());
+		assertEquals(403, other.postFile("/api/lives/" + id + "/recording", "video", "x.webm", "video/webm",
+				new byte[10]).status());
+
+		// 라이브 댓글: 비로그인 401, 로그인 201, 목록은 공개
+		assertEquals(401, anonymous.postJson("/api/lives/" + id + "/comments", "{\"content\":\"hi\"}").status());
+		assertEquals(201, other.postJson("/api/lives/" + id + "/comments", "{\"content\":\"잘 봤어요\"}").status());
+		assertEquals("잘 봤어요", JsonPath.read(anonymous.get("/api/lives/" + id + "/comments").body(),
+				"$.comments[0].content"));
+
+		assertEquals(200, owner.delete("/api/lives/" + id).status());
+		assertEquals(404, anonymous.get("/api/lives/" + id).status());
+	}
+
 	@Test
 	void liveEndsWhenPublisherNeverConnects() throws Exception {
-		String id = startLive("연결 안 함")[0];
+		HttpApi owner = user("owner");
+		String id = startLive(owner, "연결 안 함")[0];
 		long deadline = System.currentTimeMillis() + 8000;
 		while (System.currentTimeMillis() < deadline) {
-			String body = mvc.perform(get("/api/lives/" + id)).andReturn().getResponse().getContentAsString();
-			if ("ended".equals(JsonPath.read(body, "$.live.status"))) {
+			if ("ended".equals(JsonPath.read(owner.get("/api/lives/" + id).body(), "$.live.status"))) {
 				return;
 			}
 			Thread.sleep(300);
@@ -190,16 +242,17 @@ class LiveApiTests {
 
 	@Test
 	void rejectsInvalidStart() throws Exception {
-		mvc.perform(post("/api/lives").contentType(MediaType.APPLICATION_JSON).content("{\"title\":\"  \"}"))
-			.andExpect(status().isBadRequest())
-			.andExpect(jsonPath("$.error").value("방송 제목을 입력하세요."));
-		mvc.perform(get("/api/lives/nope")).andExpect(status().isNotFound());
+		HttpApi owner = user("owner");
+		HttpApi.Res res = owner.postJson("/api/lives", "{\"title\":\"  \"}");
+		assertEquals(400, res.status());
+		assertEquals("방송 제목을 입력하세요.", JsonPath.read(res.body(), "$.error"));
+		assertEquals(404, owner.get("/api/lives/nope").status());
 	}
 
 	@Test
 	void exposesIceServers() throws Exception {
-		mvc.perform(get("/api/rtc-config"))
-			.andExpect(jsonPath("$.iceServers[0].urls[0]").value("stun:stun.l.google.com:19302"));
+		assertEquals("stun:stun.l.google.com:19302",
+				JsonPath.read(new HttpApi(port).get("/api/rtc-config").body(), "$.iceServers[0].urls[0]"));
 	}
 
 }

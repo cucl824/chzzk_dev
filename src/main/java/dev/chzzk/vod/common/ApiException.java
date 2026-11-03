@@ -20,6 +20,14 @@ public class ApiException extends RuntimeException {
 		return new ApiException(HttpStatus.NOT_FOUND, message);
 	}
 
+	public static ApiException unauthorized() {
+		return new ApiException(HttpStatus.UNAUTHORIZED, "로그인이 필요합니다.");
+	}
+
+	public static ApiException forbidden(String message) {
+		return new ApiException(HttpStatus.FORBIDDEN, message);
+	}
+
 	public HttpStatus getStatus() {
 		return status;
 	}

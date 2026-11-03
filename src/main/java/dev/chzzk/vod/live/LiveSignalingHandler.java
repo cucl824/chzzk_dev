@@ -3,6 +3,7 @@ package dev.chzzk.vod.live;
 import java.net.URI;
 import java.util.Map;
 
+import org.springframework.security.core.Authentication;
 import org.springframework.stereotype.Component;
 import org.springframework.web.socket.CloseStatus;
 import org.springframework.web.socket.TextMessage;
@@ -10,6 +11,7 @@ import org.springframework.web.socket.WebSocketSession;
 import org.springframework.web.socket.handler.ConcurrentWebSocketSessionDecorator;
 import org.springframework.web.socket.handler.TextWebSocketHandler;
 
+import dev.chzzk.vod.user.LoginUser;
 import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
@@ -66,12 +68,13 @@ public class LiveSignalingHandler extends TextWebSocketHandler {
 
 		if (role == null) {
 			if ("publish".equals(type)) {
-				if (liveService.isPublisher(liveId, String.valueOf(message.get("token")))) {
+				// 핸드셰이크 요청의 로그인 세션으로 송출자를 확인한다. (소유자 + 시작한 화면의 토큰)
+				if (liveService.isPublisher(liveId, loginUserId(raw), String.valueOf(message.get("token")))) {
 					raw.getAttributes().put(ATTR_ROLE, ROLE_PUBLISHER);
 					rooms.attachPublisher(liveId, session);
 				}
 				else {
-					rejectAndClose(session, "송출 권한이 없거나 이미 종료된 방송입니다.");
+					rejectAndClose(session, "이 방송의 소유자로 로그인한 송출 화면만 송출할 수 있습니다.");
 				}
 			}
 			else if ("watch".equals(type)) {
@@ -110,6 +113,11 @@ public class LiveSignalingHandler extends TextWebSocketHandler {
 		catch (Exception ignored) {
 			// 연결이 이미 닫힘
 		}
+	}
+
+	private static Long loginUserId(WebSocketSession session) {
+		return session.getPrincipal() instanceof Authentication auth && auth.getPrincipal() instanceof LoginUser user
+				? user.getId() : null;
 	}
 
 	private static WebSocketSession out(WebSocketSession raw) {

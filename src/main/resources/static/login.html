@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>로그인</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header>
+    <a class="logo" href="/">VOD</a>
+    <div class="header-actions">
+      <a class="btn secondary" href="/">목록</a>
+    </div>
+  </header>
+  <main>
+    <section class="auth-box">
+      <div class="tabs-row" role="group" aria-label="로그인 또는 회원가입">
+        <button type="button" class="btn" data-mode="login" aria-pressed="true">로그인</button>
+        <button type="button" class="btn" data-mode="signup" aria-pressed="false">회원가입</button>
+      </div>
+
+      <form id="loginForm" class="panel">
+        <label>아이디
+          <input type="text" name="username" autocomplete="username" required>
+        </label>
+        <label>비밀번호
+          <input type="password" name="password" autocomplete="current-password" required>
+        </label>
+        <p class="error" data-error hidden></p>
+        <div><button class="btn" type="submit">로그인</button></div>
+      </form>
+
+      <form id="signupForm" class="panel" hidden>
+        <label>아이디 (영문·숫자·_ 3~20자)
+          <input type="text" name="username" autocomplete="username" minlength="3" maxlength="20" pattern="[A-Za-z0-9_]+" required>
+        </label>
+        <label>비밀번호 (8~64자)
+          <input type="password" name="password" autocomplete="new-password" minlength="8" maxlength="64" required>
+        </label>
+        <label>닉네임 (2~20자, 방송·댓글에 표시)
+          <input type="text" name="nickname" minlength="2" maxlength="20" required>
+        </label>
+        <p class="error" data-error hidden></p>
+        <div><button class="btn" type="submit">가입하고 로그인</button></div>
+      </form>
+    </section>
+  </main>
+  <script src="/common.js"></script>
+  <script>
+    const next = new URLSearchParams(location.search).get('next');
+    // 같은 사이트 안의 경로로만 돌아간다.
+    const target = next && next.startsWith('/') && !next.startsWith('//') ? next : '/';
+    const forms = { login: document.getElementById('loginForm'), signup: document.getElementById('signupForm') };
+
+    currentUser().then((user) => { if (user) location.replace(target); });
+
+    document.querySelectorAll('.tabs-row button').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.tabs-row button').forEach((b) => b.setAttribute('aria-pressed', String(b === btn)));
+        forms.login.hidden = btn.dataset.mode !== 'login';
+        forms.signup.hidden = btn.dataset.mode !== 'signup';
+      });
+    });
+
+    function bind(form, path, fields) {
+      form.addEventListener('submit', async (e) => {
+        e.preventDefault();
+        const error = form.querySelector('[data-error]');
+        const button = form.querySelector('button[type=submit]');
+        error.hidden = true;
+        button.disabled = true;
+        try {
+          const data = Object.fromEntries(fields.map((f) => [f, form[f].value]));
+          await api(path, jsonRequest('POST', data));
+          location.replace(target);
+        } catch (err) {
+          error.textContent = err.message;
+          error.hidden = false;
+          button.disabled = false;
+        }
+      });
+    }
+    bind(forms.login, '/api/auth/login', ['username', 'password']);
+    bind(forms.signup, '/api/auth/signup', ['username', 'password', 'nickname']);
+  </script>
+</body>
+</html>

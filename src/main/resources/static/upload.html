@@ -52,6 +52,9 @@
     const tabs = document.querySelectorAll('.tabs button');
     let mode = 'upload';
 
+    // 등록은 로그인 사용자만 (서버도 401 로 거절한다). 등록한 사람이 방송 소유자가 된다.
+    requireLogin();
+
     tabs.forEach((btn) => {
       btn.addEventListener('click', () => {
         mode = btn.dataset.mode;
@@ -91,6 +94,7 @@
       // 업로드 진행률 표시를 위해 fetch 대신 XHR 사용
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/api/broadcasts');
+      xhr.setRequestHeader('X-XSRF-TOKEN', csrfToken());
       xhr.upload.onprogress = (ev) => {
         if (ev.lengthComputable) progress.value = Math.round((ev.loaded / ev.total) * 100);
       };
@@ -99,6 +103,10 @@
         try { body = JSON.parse(xhr.responseText); } catch { /* 빈 응답 */ }
         if (xhr.status === 201) {
           location.href = `/watch.html?id=${encodeURIComponent(body.broadcast.id)}`;
+          return;
+        }
+        if (xhr.status === 401) {
+          location.href = loginUrl();
           return;
         }
         resetSubmit();

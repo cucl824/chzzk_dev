@@ -8,7 +8,11 @@ import jakarta.persistence.Entity;
 import jakarta.persistence.EnumType;
 import jakarta.persistence.Enumerated;
 import jakarta.persistence.Id;
+import jakarta.persistence.JoinColumn;
+import jakarta.persistence.ManyToOne;
 import jakarta.persistence.Table;
+
+import dev.chzzk.vod.user.User;
 
 /**
  * 라이브 방송 메타데이터. 영상은 저장하지 않고 송출자 브라우저에서 시청자에게 WebRTC로 바로 전달된다.
@@ -32,8 +36,8 @@ public class LiveStream {
 	private LiveStatus status;
 
 	/**
-	 * 방송을 시작한 브라우저만 송출·종료할 수 있도록 발급하는 임의 값. 로그인이 아니라 "이 방송의 송출 화면"임을
-	 * 구분하는 용도이며, 응답으로는 시작할 때 한 번만 내려준다.
+	 * 방송을 시작한 송출 화면(탭)을 구분하는 임의 값. 권한 검사는 소유자(로그인 회원)로 하고, 이 값은 같은 소유자의
+	 * 다른 탭이 송출 연결을 가로채지 않게 하는 용도다. 응답으로는 시작할 때 한 번만 내려준다.
 	 */
 	@Column(nullable = false, length = 64)
 	private String publisherToken;
@@ -43,6 +47,11 @@ public class LiveStream {
 
 	private Instant endedAt;
 
+	/** 방송을 시작한 회원. 로그인 도입 전(2단계) 기록은 null */
+	@ManyToOne
+	@JoinColumn(name = "owner_id")
+	private User owner;
+
 	/** 종료 후 녹화본이 등록되면 해당 다시보기의 id */
 	@Column(length = 36)
 	private String vodBroadcastId;
@@ -50,7 +59,8 @@ public class LiveStream {
 	protected LiveStream() {
 	}
 
-	public LiveStream(String title, String publisherToken) {
+	public LiveStream(User owner, String title, String publisherToken) {
+		this.owner = owner;
 		this.id = UUID.randomUUID().toString();
 		this.title = title;
 		this.publisherToken = publisherToken;
@@ -67,6 +77,18 @@ public class LiveStream {
 			status = LiveStatus.ENDED;
 			endedAt = Instant.now();
 		}
+	}
+
+	public boolean isOwnedBy(Long userId) {
+		return owner != null && owner.getId().equals(userId);
+	}
+
+	public void rename(String title) {
+		this.title = title;
+	}
+
+	public User getOwner() {
+		return owner;
 	}
 
 	public void linkVod(String broadcastId) {

@@ -10,4 +10,6 @@ public interface LiveStreamRepository extends JpaRepository<LiveStream, String> 
 
 	List<LiveStream> findAllByStatus(LiveStatus status);
 
+	List<LiveStream> findAllByVodBroadcastId(String vodBroadcastId);
+
 }
